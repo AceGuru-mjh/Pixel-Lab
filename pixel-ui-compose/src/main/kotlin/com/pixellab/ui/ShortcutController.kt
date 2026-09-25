@@ -9,7 +9,6 @@ import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.keyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.utf16CodePoint
 import com.pixellab.ui.theme.PixelTheme
@@ -302,7 +301,7 @@ internal fun keyLabelOf(event: KeyEvent): String {
         val ch = codePoint.toChar()
         if (!ch.isISOControl()) return ch.uppercaseChar().toString()
     }
-    return when (event.keyCode) {
+    return when (event.key.keyCode) {
         19 -> "Up"
         20 -> "Down"
         21 -> "Left"
@@ -319,6 +318,6 @@ internal fun keyLabelOf(event: KeyEvent): String {
         123 -> "F2"
         124 -> "F3"
         125 -> "F4"
-        else -> "Key${event.keyCode}"
+        else -> "Key${event.key.keyCode}"
     }
 }

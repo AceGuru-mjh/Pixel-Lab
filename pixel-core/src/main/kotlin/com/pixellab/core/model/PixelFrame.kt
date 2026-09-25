@@ -155,7 +155,7 @@ class PixelFrame private constructor(
      * width`. Input pixel (`x`, `y`) lands at output (`y`, `width - 1 - x`).
      */
     fun rotated90Ccw(): PixelFrame =
-        transformed(height, width) { x, y -> pixels[y * width + (width - 1 - y)] }
+        transformed(height, width) { x, y -> pixels[x * width + (width - 1 - y)] }
 
     /**
      * Shifts the whole frame by (`dx`, `dy`); areas shifted out are lost and

@@ -1,0 +1,85 @@
+name: Quality Gate
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structural quality gates that complement ci.yml (modeled after the
+# Android-Guru-Agent repository's dual-workflow standard):
+#   • file-size budget  — blocks God-files: main sources ≤ 1200 lines,
+#                         test sources ≤ 1600 lines per .kt file.
+#   • anti-pattern gate — blocks `javaClass.getMethod` reflective dispatch
+#                         and `printStackTrace()` in main sources; fails on
+#                         empty catch blocks.
+#   • source census     — Kotlin file/line inventory written into the run's
+#                         Job Summary, plus TODO/FIXME audit counts.
+#
+# Runs fast (<30s, no compilation) on every push & PR and manually via
+# workflow_dispatch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main, 'feature/**', 'feat/**', 'fix/**']
+  pull_request:
+    branches: [main, 'feature/**', 'feat/**']
+  workflow_dispatch:
+
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  structural-quality:
+    name: Structural Quality (SRP budget + anti-patterns)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: File-size budget gate (God-file prevention)
+        run: |
+          chmod +x scripts/check_file_size.sh
+          ./scripts/check_file_size.sh
+
+      - name: Anti-pattern gate (reflection dispatch / printStackTrace / empty catch)
+        run: |
+          chmod +x scripts/check_code_quality.sh
+          ./scripts/check_code_quality.sh
+
+      - name: Kotlin source inventory + TODO census
+        run: |
+          MAIN=$(find . -name "*.kt" -path "*/src/main/*" -not -path "./.git/*" -not -path "*/build/*" | wc -l)
+          TEST=$(find . -name "*.kt" \( -path "*/src/test/*" -o -path "*/src/androidTest/*" \) -not -path "./.git/*" -not -path "*/build/*" | wc -l)
+          MAIN_LINES=$(find . -name "*.kt" -path "*/src/main/*" -not -path "./.git/*" -not -path "*/build/*" -exec cat {} + | wc -l)
+          TEST_LINES=$(find . -name "*.kt" \( -path "*/src/test/*" \) -not -path "./.git/*" -not -path "*/build/*" -exec cat {} + | wc -l)
+          CPP_LINES=$(find . -name "*.cpp" -o -name "*.h" | grep -v build | grep -v ".git/" | xargs cat 2>/dev/null | wc -l)
+          TODO_COUNT=$(grep -rE "TODO|FIXME" --include="*.kt" --include="*.cpp" --include="*.h" . 2>/dev/null | grep -v build | grep -v .git | wc -l)
+          {
+            echo ""
+            echo "## 📦 Pixel Lab source inventory"
+            echo ""
+            echo "- Main source files: **$MAIN** ($MAIN_LINES lines)"
+            echo "- Test source files: **$TEST** ($TEST_LINES lines)"
+            echo "- C++/header lines: **$CPP_LINES**"
+            echo "- TODO/FIXME markers: **$TODO_COUNT**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Main: $MAIN files / $MAIN_LINES lines; Test: $TEST files / $TEST_LINES lines; C++: $CPP_LINES lines; TODO/FIXME: $TODO_COUNT"
+
+  workflow-metadata:
+    name: Run Metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    steps:
+      - name: Run summary
+        run: |
+          {
+            echo "## 🧪 Quality Gate Run Metadata"
+            echo ""
+            echo "- **Event:** ${{ github.event_name }}"
+            echo "- **Ref:** ${{ github.ref }}"
+            echo "- **SHA:** ${{ github.sha }}"
+            echo "- **Actor:** ${{ github.actor }}"
+          } >> "$GITHUB_STEP_SUMMARY"

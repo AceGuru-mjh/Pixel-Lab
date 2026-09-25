@@ -115,7 +115,7 @@ fun LayerPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(FooterPadding),
-            verticalAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { onAddLayer("Layer ${layers.size + 1}") }) {
                 Icon(Icons.Filled.Add, contentDescription = "Add layer")
@@ -160,7 +160,7 @@ private fun LayerRow(
             .background(rowBackground)
             .clickable(onClick = { onActiveLayerChange(layer.id) }),
     ) {
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onLayerVisibleChange(layer.id, !layer.visible) }) {
                 Icon(
                     imageVector = if (layer.visible) Icons.Filled.Eye else Icons.Filled.EyeOff,
@@ -182,7 +182,7 @@ private fun LayerRow(
             }
         }
         if (selected) {
-            Row(verticalAlignment = Alignment.Center) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { onLayerLockedChange(layer.id, !layer.locked) }) {
                     Icon(
                         imageVector = if (layer.locked) Icons.Filled.Lock else Icons.Filled.LockOpen,

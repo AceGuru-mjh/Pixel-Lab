@@ -114,6 +114,9 @@ jobs:
           cat > /tmp/pl-stubs/android/os/Build.kt <<'KSTUB'
           package android.os
           object Build {
+              object VERSION {
+                  const val SDK_INT: Int = 34
+              }
               const val VERSION_CODES_BASE: Int = 1
               val MANUFACTURER: String = "stub"
               val MODEL: String = "stub"

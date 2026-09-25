@@ -102,7 +102,7 @@ fun PalettePanel(
 
     Column(modifier = modifier) {
         // Header: big current-color swatch, hex label and palette switcher.
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
                     .size(CurrentSwatchSize)
@@ -129,7 +129,7 @@ fun PalettePanel(
                         .heightIn(min = 44.dp)
                         .clickable(onClick = { menuExpanded = true })
                         .padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         text = "Palettes",

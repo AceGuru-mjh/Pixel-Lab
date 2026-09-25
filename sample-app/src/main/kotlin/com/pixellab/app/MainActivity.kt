@@ -301,7 +301,7 @@ fun PixelLabSampleApp() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 for (candidate in Tool.entries) {
                     FilterChip(
@@ -419,7 +419,7 @@ fun PixelLabSampleApp() {
             // 5. Local agent command line.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedTextField(
                     value = agentInput,

@@ -92,7 +92,7 @@ fun GalleryScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(text = "Pixel Lab Gallery", fontSize = 20.sp)
             Spacer(modifier = Modifier.width(8.dp))
@@ -124,7 +124,7 @@ fun GalleryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(CardSpacing),
-                            verticalAlignment = Alignment.Center,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             ProjectThumb(
                                 bytes = projectStore.thumbnail(summary.id),

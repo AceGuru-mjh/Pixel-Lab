@@ -131,7 +131,7 @@ fun EditorScreen(
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.Center,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             TextButton(onClick = { if (dirty) confirmLeave = true else onClose() }) {
                                 Text(text = "< Gallery")

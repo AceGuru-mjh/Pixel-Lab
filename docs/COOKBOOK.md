@@ -250,3 +250,52 @@ Sec-WebSocket-Version: 13
 | Agent 工具化 | `pixel-mcp`：SSE 或 WebSocket 传输，120 个工具 |
 | 持久化 | `ProjectStore(rootDir)`：原子写 + LRU 缓存 + 缩略图 |
 | 直接 Kotlin | `PixelLab.create()` 门面 + 各包公共 API |
+
+## 第 4 轮配方（V4 工具）
+
+### 配方 13：照片精灵的无损放大管线
+```
+1. io_import_frames(data_b64)             # 嗅探格式 + 尺寸
+2. frame_resample(width=64, height=64, mode=box)   # 半像素中心盒滤波缩到目标
+3. frame_otsu(levels=4)                   # 4 级 Otsu 阈值（自动多级）
+4. frame_morphology(op=cleanup)           # 去尘 + 补缝
+5. frame_audit()                          # 工艺评分（目标 ≥ 90）
+```
+
+### 配方 14：角色 45° 旋转（保持像素锐利）
+```
+1. frame_rotate(degrees=45, bounds=expand)   # RotSprite 三剪切 → 新项目
+2. frame_scale2x(factor=2)                   # AdvMAME 2x → 干净 2x
+3. export_png() / export_svg(mode=runs)     # 位图或矢量交付
+```
+
+### 配方 15：无障碍调色板审查
+```
+1. color_contrast_audit(level=aa)          # 最差对在前
+2. color_contrast_suggest(color="#777777", against="#FFFFFF")  # 保色相修复
+3. color_simulate(deficiency=deutan, severity=1.0)             # 原位模拟
+4. color_comparison_strip()                # 5 格并排预览新项目
+5. undo（如需回滚模拟）
+```
+
+### 配方 16：程序化关卡生成
+```
+1. gen_dungeon(width=96, height=72, seed=42)   # BSP 地牢新项目
+2. frame_morphology(op=close)                 # 补走廊缝隙
+3. frame_components(mode=opaque)              # 房间清单（面积/包围盒/门）
+4. export_svg(mode=outline)                  # 给引擎用的矢量底图
+```
+
+### 配方 17：地牢瓦片噪声洞穴混合
+```
+1. gen_cave(width=96, height=64, walk_tiles=400)  # 元胞自动机 + 醉汉走
+2. gen_biome(theme=overworld, seed=7)             # 独立世界图
+3. frame_convolve(kernel=gaussian3, alpha=alpha_only)   # 只滤 alpha 软化洞口
+```
+
+### 配方 18：动画徽章（SMIL SVG，零脚本）
+```
+1. gen_lsystem(preset=tree, iterations=3)  # 树
+2. + 每帧手绘/生成 → export_svg_animated(frame_duration_ms=100, loop=true)
+   → 任何纯 SVG 渲染器直接播放
+```

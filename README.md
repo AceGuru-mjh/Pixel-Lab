@@ -81,7 +81,12 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #34 | 瓦片地图（blob-47/Wang 自动贴图 + 等距渲染）+ 图集打包（MaxRects + 五格式元数据） | +2,671 行 |
 | PR #35 | Compose 编辑器套件（脚手架/时间轴/取色器/色板/快捷键/CRT 预览/主题） | +3,308 行 |
 | PR #36 | MCP v3：WebSocket 传输 + 29 新工具（总 119）+ ProjectStore + 画廊/编辑器 + Agent 手册 | +3,266 行 |
-| **合计** | | **39,164 行**（Kotlin 37,022 + C++ 2,142） |
+| PR #42 | **CI 真实化**：修复全红 CI（触发分支/Gradle 8.1/NDK 头/Compose 插件）+ quality-gate 双工作流 + 图像分析层（直方图/Otsu/卷积/形态学/连通域/PSNR/像素工艺审计）+ 首个 JUnit 套件 | +4,580 行 |
+| PR #43 | 变换算法：RotSprite 三剪切旋转 + Scale2x/3x + EPX + xBR + 半像素重采样 | +1,282 行 |
+| PR #44 | 世界生成：Worley/BSP 地牢/元胞洞穴/生物群系 + L-系统 + 确定性粒子系统 | +1,772 行 |
+| PR #45 | 色彩科学 + 矢量：Machado/Viénot 色盲模拟 + WCAG 对比度审计 + CSS 命名 + 开尔文色温 + MarchingSquares + SVG/SMIL 导出 | +1,833 行 |
+| PR #46 | MCP v4：32 新工具（总 **151**）+ 配方 13-18 | +1,249 行 |
+| **合计** | | **49,680 行**（Kotlin 47,538 + C++ 2,142），**151 个 MCP 工具** |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

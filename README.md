@@ -59,9 +59,25 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 ## 验证状态
 
 - 全模块 kotlinc 2.0.21 编译 0 error
-- C++ 全文件 g++ `-Wall -Wextra` 语法 0 警告级问题 + 行为冒烟全绿（量化 3 算法确定性/抖动 7 核/洪泛/合成/LZW 回环/GIF 结构）
+- C++ 全文件 g++ `-Wall -Wextra` 语法干净 + ASan/UBSan 行为冒烟全绿（量化 3 算法确定性/抖动 7 核/洪泛/合成/LZW 回环/GIF 结构）
 - GIF/PNG/APNG 编码经 JDK ImageIO / 独立解码器像素级验证
-- MCP 服务器真实端口冒烟：initialize → tools/list(55) → tools/call → SSE 事件流
+- MCP 服务器真实端口冒烟：initialize → tools/list → tools/call → SSE 事件流
+- 六个增强 PR（+10,342 行）逐一通过行为冒烟后合并
+
+## 规模与演进
+
+| 阶段 | 内容 | 规模 |
+|:---|:---|:---|
+| 基础版 | 4 模块 + C++ 热路径 + 文档/CI | 11,206 行 Kotlin + 2,120 行 C++ |
+| PR #1 | 高级工具引擎（几何/选区/混合/对称/笔刷） | +1,812 行 |
+| PR #2 | **优质画板** PixelCanvasPro（9 工具/蚂蚁线/HSV 取色器） | +2,269 行 |
+| PR #3 | 调色板宇宙（21 板 + 互导格式 + 色彩科学） | +1,133 行 |
+| PR #4 | 动画特效库（13 特效 + 7 缓动） | +1,333 行 |
+| PR #5 | 文字排版引擎 v2（发光/描边/阴影 + 8 模板） | +1,525 行 |
+| PR #6 | 项目序列化 + Aseprite 导出 + MCP 工具 v2（总 90 工具） | +2,270 行 |
+| **合计** | | **23,664 行** |
+
+任务看板：https://github.com/users/AceGuru-mjh/projects/5
 
 ## License
 

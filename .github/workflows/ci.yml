@@ -127,7 +127,8 @@ jobs:
         run: |
           CP="/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar"
           "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-main \
-            $(find pixel-core/src/main/kotlin -name '*.kt' | sort)
+            $(find pixel-core/src/main/kotlin -name '*.kt' | sort) \
+            $(find /tmp/pl-stubs -name '*.kt' | sort)
 
       - name: Compile pixel-core test sources
         run: |
@@ -271,18 +272,27 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: g++ syntax + warnings gate with JNI and NDK headers
+      - name: g++ syntax + warnings gate with JNI and log stubs
         run: |
           CPP=pixel-core/src/main/cpp
-          JNI_INC="-I$JAVA_HOME/include -I$JAVA_HOME/include/linux"
-          # jni_core.cpp includes <android/log.h> from the NDK sysroot;
-          # pick the newest installed NDK when one is present.
-          NDK_SYSROOT=$(ls -d $ANDROID_HOME/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/sysroot 2>/dev/null | sort -V | tail -n 1)
-          if [ -n "$NDK_SYSROOT" ]; then
-            JNI_INC="$JNI_INC -I$NDK_SYSROOT/usr/include -I$NDK_SYSROOT/usr/include/aarch64-linux-android"
-          else
-            echo "warning: no NDK found; android/* headers unavailable" >&2
-          fi
+          # jni_core.cpp includes <android/log.h>, an NDK header. Mixing
+          # the NDK sysroot into host g++ breaks glibc headers, so we
+          # compile against a minimal declaration stub instead — the full
+          # NDK build happens in the Gradle job.
+          mkdir -p /tmp/android-stub/android
+          cat > /tmp/android-stub/android/log.h <<'CSTUB'
+          #pragma once
+          enum {
+              ANDROID_LOG_VERBOSE = 2,
+              ANDROID_LOG_DEBUG = 3,
+              ANDROID_LOG_INFO = 4,
+              ANDROID_LOG_WARN = 5,
+              ANDROID_LOG_ERROR = 6,
+          };
+          int __android_log_print(int prio, const char* tag, const char* fmt, ...);
+          int __android_log_write(int prio, const char* tag, const char* text);
+          CSTUB
+          JNI_INC="-I$JAVA_HOME/include -I$JAVA_HOME/include/linux -I/tmp/android-stub"
           FAIL=0
           for f in $(find $CPP -name '*.cpp' | sort); do
             echo "checking $f"

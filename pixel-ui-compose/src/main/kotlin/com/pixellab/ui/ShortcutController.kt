@@ -301,7 +301,7 @@ internal fun keyLabelOf(event: KeyEvent): String {
         val ch = codePoint.toChar()
         if (!ch.isISOControl()) return ch.uppercaseChar().toString()
     }
-    return when (event.key.keyCode) {
+    return when (event.key.keyCode.toInt()) {
         19 -> "Up"
         20 -> "Down"
         21 -> "Left"

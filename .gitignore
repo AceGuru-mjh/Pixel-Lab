@@ -1,0 +1,31 @@
+# Build
+build/
+.gradle/
+local.properties
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+bin/
+gen/
+out/
+
+# Native
+*.so
+*.o
+
+# Logs / misc
+*.log
+nbp-private/
+dictionary

@@ -347,11 +347,13 @@ fun PixelCanvasPro(
             }
             .pointerInput(state) {
                 // Hover (unpressed moves): updates the crosshair + readout.
-                while (true) {
-                    val event = awaitPointerEvent()
-                    if (currentPlaying.value) continue
-                    val change = event.changes.firstOrNull() ?: continue
-                    if (!change.pressed) emitCursor(change.position)
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (currentPlaying.value) continue
+                        val change = event.changes.firstOrNull() ?: continue
+                        if (!change.pressed) emitCursor(change.position)
+                    }
                 }
             }
             .pointerInput(state) {
@@ -646,7 +648,7 @@ fun PixelCanvasPro(
             val bottom = selection.bottom.toInt().coerceIn(0, p.height)
             if (right > left && bottom > top) {
                 val perimeter = (right - left) * 2 + (bottom - top) * 2
-                val shift = (antsPhase * perimeter).toInt()
+                val shift = (antsPhase.value * perimeter).toInt()
                 val antDark = scheme.inverseSurface
                 val antLight = scheme.surface
                 fun antCell(x: Int, y: Int, index: Int) {

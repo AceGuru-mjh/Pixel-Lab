@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -320,7 +321,7 @@ fun TimelinePro(
 
     Column(modifier = modifier) {
         // ---- transport row -------------------------------------------------
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
                 onClick = { onPlaybackChange(playback.copy(playing = !playback.playing)) },
             ) {
@@ -354,7 +355,7 @@ fun TimelinePro(
                     color = theme.accent,
                 )
             }
-            Row(verticalAlignment = Alignment.Center) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(text = "FPS", fontSize = 11.sp, color = theme.textSecondary)
                 IconButton(
                     onClick = { onFpsChange((project.fps - 1).coerceAtLeast(MinFps)) },
@@ -372,7 +373,7 @@ fun TimelinePro(
                     Text(text = "+", fontSize = 16.sp, color = theme.textPrimary)
                 }
             }
-            Row(verticalAlignment = Alignment.Center) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(text = "Onion", fontSize = 11.sp, color = theme.textSecondary)
                 Switch(
                     checked = playback.onionSkin,
@@ -394,7 +395,7 @@ fun TimelinePro(
         }
 
         // ---- frame ops row --------------------------------------------------
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onAddFrame(active) }) {
                 Icon(imageVector = Icons.Filled.Add, contentDescription = "Add frame")
             }
@@ -439,7 +440,7 @@ fun TimelinePro(
         // ---- duration override editor ----------------------------------------
         val frame = project.frames[active]
         val durationText = frame.durationMs?.toString() ?: ""
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "Frame ${active + 1} duration (ms)",
                 fontSize = 11.sp,
@@ -509,7 +510,7 @@ private fun FrameCard(
                     filterQuality = FilterQuality.None,
                 )
             }
-            Row(verticalAlignment = Alignment.Center) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = (index + 1).toString(),
                     fontSize = 10.sp,

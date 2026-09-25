@@ -75,7 +75,7 @@ fun ZoomControls(
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier,
-        verticalAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(
             onClick = { onZoomChange(state.clampZoom(state.zoom / ZoomStep)) },

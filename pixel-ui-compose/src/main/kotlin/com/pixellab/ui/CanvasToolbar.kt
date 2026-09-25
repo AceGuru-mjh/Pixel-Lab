@@ -365,7 +365,7 @@ fun CanvasToolbar(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(previewSide.dp)
+                        .size(previewSide.value.dp)
                         .background(scheme.primary, RoundedCornerShape(1.dp)),
                     content = {},
                 )

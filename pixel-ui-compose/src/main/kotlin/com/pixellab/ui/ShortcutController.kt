@@ -5,6 +5,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import com.pixellab.ui.theme.PixelTheme
 
@@ -251,15 +255,16 @@ fun ShortcutLayer(
     val currentOnShortcut = rememberUpdatedState(onShortcut)
     Box(
         modifier = modifier.onPreviewKeyEvent { event: KeyEvent ->
+            val label = keyLabelOf(event)
             val shortcut = map.findShortcut(
-                event.key.keyName,
+                label,
                 event.isCtrlPressed,
                 event.isShiftPressed,
                 event.isAltPressed,
             )
             if (shortcut != null) {
                 val action = map.find(
-                    event.key.keyName,
+                    label,
                     event.isCtrlPressed,
                     event.isShiftPressed,
                     event.isAltPressed,
@@ -277,5 +282,41 @@ fun ShortcutLayer(
         },
     ) {
         content()
+    }
+}
+
+/**
+ * Normalizes a Compose [KeyEvent] into the human key label consumed by
+ * [ShortcutMap] ("A", "1", "Up", "Enter", "Escape", …).
+ *
+ * Printable keys surface as their uppercase character via
+ * `utf16CodePoint`; the non-printable navigation/control keys map from
+ * their Android keycodes; anything else falls back to a stable
+ * `"Key<code>"` label.
+ */
+internal fun keyLabelOf(event: KeyEvent): String {
+    val codePoint = event.utf16CodePoint
+    if (codePoint != 0) {
+        val ch = codePoint.toChar()
+        if (!ch.isISOControl()) return ch.uppercaseChar().toString()
+    }
+    return when (event.keyCode) {
+        19 -> "Up"
+        20 -> "Down"
+        21 -> "Left"
+        22 -> "Right"
+        62 -> "Space"
+        66 -> "Enter"
+        67 -> "Backspace"
+        61 -> "Tab"
+        111 -> "Escape"
+        112 -> "Delete"
+        69 -> "Minus"
+        70 -> "Equals"
+        122 -> "F1"
+        123 -> "F2"
+        124 -> "F3"
+        125 -> "F4"
+        else -> "Key${event.keyCode}"
     }
 }

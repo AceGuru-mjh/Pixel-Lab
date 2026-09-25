@@ -61,8 +61,9 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 - 全模块 kotlinc 2.0.21 编译 0 error
 - C++ 全文件 g++ `-Wall -Wextra` 语法干净 + ASan/UBSan 行为冒烟全绿（量化 3 算法确定性/抖动 7 核/洪泛/合成/LZW 回环/GIF 结构）
 - GIF/PNG/APNG 编码经 JDK ImageIO / 独立解码器像素级验证
-- MCP 服务器真实端口冒烟：initialize → tools/list → tools/call → SSE 事件流
-- 六个增强 PR（+10,342 行）逐一通过行为冒烟后合并
+- MCP 服务器真实端口冒烟：initialize → tools/list → tools/call → SSE 事件流 + **WebSocket（RFC 6455 握手/掩码/分片/ping/close 1002 活体测试）**
+- 十一个增强 PR（+26,112 行）逐一通过行为冒烟后合并（PR7-11 冒烟合计 565 断言全绿）
+- 冒烟测试修复过的真实缺陷：JDK Inflater 零容量自旋、Aseprite 现行规范 3 处布局偏差、PixelFrame.rotated90Ccw 索引笔误
 
 ## 规模与演进
 
@@ -75,7 +76,12 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #4 | 动画特效库（13 特效 + 7 缓动） | +1,333 行 |
 | PR #5 | 文字排版引擎 v2（发光/描边/阴影 + 8 模板） | +1,525 行 |
 | PR #6 | 项目序列化 + Aseprite 导出 + MCP 工具 v2（总 90 工具） | +2,270 行 |
-| **合计** | | **23,664 行** |
+| PR #32 | **导入管线**：GIF/PNG(APNG)/QOI/BMP 解码 + Aseprite .ase 导入 + ICO 导出 | +3,526 行 |
+| PR #33 | 命令历史 + 程序化生成（纹理/精灵）+ JSON 流水线配方 | +2,999 行 |
+| PR #34 | 瓦片地图（blob-47/Wang 自动贴图 + 等距渲染）+ 图集打包（MaxRects + 五格式元数据） | +2,671 行 |
+| PR #35 | Compose 编辑器套件（脚手架/时间轴/取色器/色板/快捷键/CRT 预览/主题） | +3,308 行 |
+| PR #36 | MCP v3：WebSocket 传输 + 29 新工具（总 119）+ ProjectStore + 画廊/编辑器 + Agent 手册 | +3,266 行 |
+| **合计** | | **39,164 行**（Kotlin 37,022 + C++ 2,142） |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

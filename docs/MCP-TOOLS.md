@@ -61,3 +61,38 @@
 ```
 
 响应：`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"ok\":true,...}"}]}}`
+
+## V3 — 导入/生成/瓦片地图/图集/历史/流水线（29 个新工具，v3 传输含 WebSocket）
+
+V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `transport/WebSocketServer.kt`：手写 RFC 6455 WebSocket（SHA-1 握手、帧编解码、分片、ping/pong、掩码强制校验），与 SSE 传输共用 JSON-RPC 核心。
+
+### v3-io（6）
+
+| 工具 | 参数 | 说明 |
+|:---|:---|:---|
+| `io_import_frames` | data_b64 | 魔数嗅探 PNG/APNG/GIF/QOI/BMP/ASE → 格式/尺寸/帧数/延迟/调色板提示 |
+| `io_import_project` | data_b64, name? | 项目 JSON（v2 线格式）→ 会话项目 |
+| `io_export_qoi` | frame_index?, session_id? | 合成帧 → QOI 1.0 字节 |
+| `io_export_bmp` | frame_index?, session_id? | 合成帧 → 32 位 BMP |
+| `io_export_ico` | sizes?, session_id? | 合成帧 → 多分辨率 ICO（默认 [16,32,48]） |
+| `io_export_atlas` | padding?, extrude?, trim?, format?, scale? | 全帧打包图集 PNG + 引擎元数据（generic/godot3/godot4/tiled/phaser） |
+
+### v3-gen（10）
+
+`gen_texture`(type: clouds/wood/stone/marble/bricks/checker, width, height, palette_id?|colors[], seed?, rings?/veins?/brick_w?/brick_h?/mortar?/cell?) · `gen_sprite`(type: tree/rock/gem/ship, size?|width/height, colors?, seed?) · `gen_noise_field`(width, height, seed, tile?, octaves?) · `gen_silhouette`(color) · `outline`(color, mode: outer/inner, connectivity: 4/8) · `shade`(light_angle?, strength?, dark_color?, light_color?) · `ramp`(base_color, steps, lighten?, darken?) → 纯函数 hex 列表 · `flip_rotate`(op: fliph/flipv/rot90cw/rot90ccw/rot180) · `canvas_resize`(width, height, anchor: center/corner) · `project_thumbnail`(frame_index?, max_size?≤64)
+
+### v3-map（5）
+
+`tilemap_create`(rows[]: "01" 字符串, tile_size?, tileset?) → map_id · `tilemap_autotile`(map_id, terrain_tag, mode: blob47/simple16/wang) · `tilemap_render`(map_id, scale?) → PNG · `tilemap_iso_render`(map_id, tile_w?, tile_h?, height_offsets[]?) → PNG · `iso_diamond_mask`(tile_w, tile_h) → PNG
+
+### v3-atlas（2）
+
+`texture_trim`(minimum?) → 偏移量 · `texture_extrude`(amount) → 抗缝隙外扩
+
+### v3-history（4）
+
+`history_status` → 深度/条目标签/脏标记 · `history_undo` · `history_redo` · `history_mark_saved` — 每会话独立命令历史，创建/编辑/生成全部可撤销
+
+### v3-pipeline（2）
+
+`pipeline_run`(recipe_json) → 步骤顺序执行（scale/quantize/dither/palette-map/outline/trim/posterize/bg-remove） · `pipeline_recipe_validate`(recipe_json) → 步骤摘要（纯校验）

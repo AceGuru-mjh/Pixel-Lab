@@ -220,7 +220,7 @@ private fun PaletteSwatch(
         Box(
             modifier = Modifier
                 .size(SwatchVisualSize)
-                .scale(pressScale)
+                .scale(pressScale.value)
                 .background(Color(color), RoundedCornerShape(SwatchCorner))
                 .then(
                     if (selected) {

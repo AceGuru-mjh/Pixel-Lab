@@ -223,7 +223,7 @@ private fun TimelineFrameCard(
                 },
             )
             .padding(FrameCardPadding),
-        horizontalAlignment = Alignment.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Image(
             bitmap = bitmap,

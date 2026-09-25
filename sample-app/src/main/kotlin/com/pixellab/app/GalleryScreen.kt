@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -92,7 +91,7 @@ fun GalleryScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(text = "Pixel Lab Gallery", fontSize = 20.sp)
             Spacer(modifier = Modifier.width(8.dp))
@@ -124,7 +123,7 @@ fun GalleryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(CardSpacing),
-                            verticalAlignment = Alignment.Center,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             ProjectThumb(
                                 bytes = projectStore.thumbnail(summary.id),

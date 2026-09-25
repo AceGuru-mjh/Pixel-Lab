@@ -63,7 +63,7 @@ fun StatusBar(
     compact: Boolean = false,
 ) {
     Row(
-        verticalAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .height(BarHeight)
             .background(theme.background)

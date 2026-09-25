@@ -146,7 +146,7 @@ fun Int.argbColor(): Color = Color(this)
 
 /** Ambient [PixelTheme] slot for hosts that prefer implicit theming. */
 val LocalPixelTheme: androidx.compose.runtime.ProvidableCompositionLocal<PixelTheme> =
-    staticCompositionLocalOf(PixelThemes.DARK)
+    staticCompositionLocalOf { PixelThemes.DARK }
 
 /**
  * Built-in theme presets.

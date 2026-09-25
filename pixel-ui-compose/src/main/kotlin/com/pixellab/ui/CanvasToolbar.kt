@@ -293,7 +293,7 @@ fun CanvasToolbar(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             for (tool in DrawTool.entries) {
                 val selected = state.tool == tool
@@ -304,7 +304,7 @@ fun CanvasToolbar(
                         onToolChange(tool)
                     },
                     label = {
-                        Row(verticalAlignment = Alignment.Center) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             PixelGlyph(
                                 glyph = toolGlyph(tool),
                                 tint = if (selected) scheme.primary else scheme.onSurfaceVariant,
@@ -329,7 +329,7 @@ fun CanvasToolbar(
                     onGridToggle()
                 },
                 label = {
-                    Row(verticalAlignment = Alignment.Center) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         PixelGlyph(
                             glyph = GridGlyph,
                             tint = if (gridSelected) scheme.primary else scheme.onSurfaceVariant,
@@ -352,7 +352,7 @@ fun CanvasToolbar(
         // then the segmented symmetry selector.
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             // Animated brush square: the side grows with the brush size.
             val previewSide = animateFloatAsState(
@@ -365,7 +365,7 @@ fun CanvasToolbar(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(previewSide.dp)
+                        .size(previewSide.value.dp)
                         .background(scheme.primary, RoundedCornerShape(1.dp)),
                     content = {},
                 )
@@ -409,7 +409,7 @@ private fun SymmetrySelector(
 ) {
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(SegmentCorner)
-    Row(verticalAlignment = Alignment.Center) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         for (symmetry in CanvasSymmetry.entries) {
             val selected = state.symmetry == symmetry
             Box(

@@ -14,8 +14,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Eye
-import androidx.compose.material.icons.filled.EyeOff
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Icon
@@ -163,7 +163,7 @@ private fun LayerRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onLayerVisibleChange(layer.id, !layer.visible) }) {
                 Icon(
-                    imageVector = if (layer.visible) Icons.Filled.Eye else Icons.Filled.EyeOff,
+                    imageVector = if (layer.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
                     contentDescription = if (layer.visible) "Hide layer" else "Show layer",
                 )
             }

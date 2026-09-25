@@ -367,17 +367,42 @@ class PixelMcpServer(private val config: com.pixellab.core.PixelLabConfig = Pixe
 }
 ```
 
-Implementation: JSON-RPC 2.0 over Ktor CIO with an SSE endpoint
-(`/sse` + `/messages` post-back, MCP-style). Tool registry of 36+ tools grouped
-by category: `canvas_*`, `draw_*`, `layer_*`, `frame_*`, `palette_*`,
-`convert_*`, `anim_*`, `export_*`, `text_*`, `template_*`, `project_*`.
-Tools are pure functions from JSON params to JSON results (kotlinx
-serialization); state lives in a `PixelSessionStore` (in-memory map of
-session id -> SpriteProject). Server never blocks: tool execution on
-`Dispatchers.Default`. GIF/PNG results return file paths + byte counts, never
-base64 blobs. Deterministic tool ids `pixel.*`? — **No: plain `draw_pixel`
-style ids** (host registry prefixes itself). Full tool list lives in
-`docs/MCP-TOOLS.md`.
+Implementation: **zero external dependencies** (module depends only on
+pixel-core + coroutines). Transport = `java.net.ServerSocket` with a
+hand-rolled minimal HTTP/1.1 parser: `GET /sse` opens a chunked
+`text/event-stream` response kept open; `POST /messages` (and `/mcp`) accept
+JSON-RPC 2.0 bodies and write responses both to the HTTP response and the SSE
+stream. JSON = hand-rolled tree API in `json/Json.kt`
+(`Json.parse(text): JsonElement`, `Json.write(element): String`,
+`JsonElement` sealed hierarchy: `JsonObject`/`JsonArray`/`JsonString`/
+`JsonNumber`/`JsonBoolean`/`JsonNull`, plus `obj { put("k", v) }`-style
+builders and `long("k")`/`string("k")`/`int("k")`/`bool("k")`/`array("k")`
+accessors). Tool registry of 36+ tools grouped by category: `canvas_*`,
+`draw_*`, `layer_*`, `frame_*`, `palette_*`, `convert_*`, `anim_*`,
+`export_*`, `text_*`, `template_*`, `project_*`. Tools are pure functions
+from JsonObject params to JsonObject results; state lives in
+`PixelSessionStore` (in-memory map session id -> SpriteProject). Server never
+blocks: socket accept loop + tool execution on `Dispatchers.IO`/`Default`.
+GIF/PNG results return byte counts (never base64 blobs). Tool ids are plain
+dotted-free snake_case (`draw_pixel`). Handshake: JSON-RPC `initialize`
+method, `tools/list`, `tools/call`. Full tool table lives in
+`docs/MCP-TOOLS.md` (coordinator-delivered doc file; agents write tools to
+match the registry names below):
+
+canvas_create, canvas_info, canvas_clear, canvas_shift, canvas_flip_h,
+canvas_flip_v, canvas_rotate, canvas_outline,
+draw_pixel, draw_line, draw_rect, draw_circle, draw_pixels, draw_stroke,
+fill, pick_color, replace_color, erase_pixels,
+layer_add, layer_remove, layer_rename, layer_move, layer_set_opacity,
+layer_set_visible, layer_set_locked, layer_list,
+frame_add, frame_clone, frame_delete, frame_move, frame_set_duration,
+frame_list,
+palette_list, palette_switch, palette_closest_color,
+convert_image, convert_analyze, convert_refine,
+anim_set_fps, anim_tag, anim_breathe, anim_preview_count,
+text_generate, template_apply, template_list,
+export_png, export_spritesheet, export_gif, export_apng, export_codex_pet,
+project_new, project_state, project_list, project_undo, project_redo
 
 ## §9 sample-app/
 

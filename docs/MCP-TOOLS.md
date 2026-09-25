@@ -96,3 +96,27 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 ### v3-pipeline（2）
 
 `pipeline_run`(recipe_json) → 步骤顺序执行（scale/quantize/dither/palette-map/outline/trim/posterize/bg-remove） · `pipeline_recipe_validate`(recipe_json) → 步骤摘要（纯校验）
+
+## V4（32 个）— 第 4 轮能力（分析 / 变换 / 世界生成 / 色彩科学 / 矢量）
+
+### v4-analysis（10）
+
+`frame_histogram`(session_id) → R/G/B/A/Rec.709 luma 通道统计（均值/方差/熵/分位数/透明比） · `frame_otsu`(session_id, levels, binarize) → Otsu 单级/多级（DP）阈值，可选二值化 · `frame_equalize`(session_id) → 保色相 luma 直方图均衡 · `frame_autolevels`(session_id, low_pct, high_pct) → 百分位对比度拉伸 · `frame_convolve`(session_id, kernel[13 种], edge[clamp/wrap/transparent], alpha[premultiplied/straight/alpha_only]) → 卷积 · `frame_morphology`(session_id, op[8 种], element[square3/cross3/square5]) → 膨胀/腐蚀/开闭/去孤点/填洞/描边/清理 · `frame_components`(session_id, connectivity, mode) → 连通域清单（面积/包围盒/周长/洞/边界） · `frame_metrics`(session_id, frame_index_b, frame_index_a, tolerance) → MAE/PSNR/差异比/差异框 · `frame_audit`(session_id, tiny_cluster_area, similar_tolerance) → 像素工艺审计（尘点/断角/棋盘/洞/微簇/锯齿）+ 0-100 评分 + 建议 · `frame_remove_small`(session_id, min_area, connectivity) → 按面积去斑
+
+### v4-transform（6）
+
+`frame_rotate`(session_id, degrees, bounds[expand/crop]) → RotSprite 三次剪切任意角度（crop 原位 / expand 新项目） · `frame_scale2x`(session_id, factor[2/3], variant[plain/corners]) → AdvMAME Scale2x/3x 新项目 · `frame_epx`(session_id, factor[2/3]) → EPX 整数放大新项目 · `frame_xbr`(session_id) → xBR2x 新项目 · `frame_resample`(session_id, width, height, mode[nearest/box]) → 半像素中心重采样新项目 · `frame_mipmap`(session_id, max_levels) → 只读金字塔（尺寸 + 每级 PNG b64）
+
+### v4-worldgen（6）
+
+`gen_worley`(session_id, width, height, seed, feature[f1/f2/border/cell], cell_size, contrast) → Worley 噪声新项目 · `gen_dungeon`(session_id, width, height, seed, min_leaf) → BSP 地牢（房间/走廊/门）新项目 · `gen_cave`(session_id, width, height, seed, fill_chance, smooth_passes, walk_tiles) → 元胞自动机洞穴新项目 · `gen_biome`(session_id, width, height, seed, theme[overworld/volcanic/frozen], height_scale, moisture_scale) → 生物群系世界图新项目 · `gen_lsystem`(session_id, preset[bush/tree/koch/fern/custom], axiom, rule, iterations, step, angle, seed) → L-系统像素植物新项目 · `sim_particles`(session_id, preset[fire/rain/starfield/explosion/smoke], seconds, seed, width, height, rate, soft) → 确定性粒子模拟最后一帧新项目
+
+### v4-color（7）
+
+`color_simulate`(session_id, deficiency[protan/deutan/tritan/achromat], severity, model[machado/brettel]) → 色觉缺陷模拟（原位） · `color_contrast_audit`(session_id, level[aa/aaa]) → 调色板 WCAG 全对比矩阵（最差优先） · `color_contrast_suggest`(color, against, level, large) → 保色相可达性替换色建议 · `color_name`(color 或 session_id) → CSS 精确名 + 最近名（ΔE） · `color_temperature`(kelvin 或 session_id, strength) → 开尔文色温应用/单色换算 · `color_white_balance`(session_id, strength) → 灰世界自动白平衡（原位） · `color_comparison_strip`(session_id, severity, cell_width, cell_height) → 原图+四模拟并排条新项目
+
+### v4-vector（3）
+
+`frame_contours`(session_id, color, tolerance, simplify) → 走廊格轮廓环（洞标记 + path 字符串） · `export_svg`(session_id, mode[runs/outline], title) → 静态 SVG（每色一 path，b64 返回） · `export_svg_animated`(session_id, frame_duration_ms, loop, title) → SMIL 动画 SVG（每帧一个 g + 离散 opacity 驱动）
+
+**累计：151 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32）。

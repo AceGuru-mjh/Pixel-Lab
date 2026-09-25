@@ -196,7 +196,7 @@ fun ColorPickerPanel(
 
     Column(modifier = modifier) {
         // Header: big current-color swatch + hex + HSV readout.
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
                     .size(CurrentSwatchSize)

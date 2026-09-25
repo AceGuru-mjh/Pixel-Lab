@@ -57,7 +57,7 @@ fun PixelCursorReadout(
             .height(ReadoutHeight)
             .background(scheme.surfaceVariant)
             .padding(horizontal = 6.dp, vertical = ReadoutBodyPadding),
-        verticalAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         val coords = info?.let { "(${it.x}, ${it.y})" } ?: "—"
         Text(

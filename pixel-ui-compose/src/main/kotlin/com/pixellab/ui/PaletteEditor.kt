@@ -149,7 +149,7 @@ fun PaletteEditor(
 
         // ---- action row ----------------------------------------------------
         Row(
-            verticalAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.height(ActionRowHeight),
         ) {
             IconButton(onClick = { onPaletteChange(palette.withColor(currentColor)) }) {

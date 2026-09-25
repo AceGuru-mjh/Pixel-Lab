@@ -99,7 +99,7 @@ fun HistoryPanel(
 
     Column(modifier = modifier) {
         // ---- transport header -------------------------------------------
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onUndo, enabled = canUndo) {
                 Icon(imageVector = Icons.Filled.Undo, contentDescription = "Undo")
             }
@@ -168,7 +168,7 @@ private fun HistoryRow(
     onClick: () -> Unit,
 ) {
     Row(
-        verticalAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .height(HistoryRowHeight)
             .padding(horizontal = ScrollbarWidth + 4.dp)

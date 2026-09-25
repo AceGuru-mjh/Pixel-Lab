@@ -220,7 +220,7 @@ fun ColorSliders(
 
     Column(modifier = modifier) {
         // ---- current / previous swatch pair -----------------------------
-        Row(verticalAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             SwatchPair(theme, current = argb, previous = previousColor)
         }
 
@@ -340,7 +340,7 @@ private fun SliderRow(
     onFraction: (Float) -> Unit,
 ) {
     Row(
-        verticalAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.height(theme.metrics.controlHeight),
     ) {
         Text(

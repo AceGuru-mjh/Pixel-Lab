@@ -18,5 +18,9 @@ file(GLOB_RECURSE PIXEL_LAB_SOURCES CONFIGURE_DEPENDS
 
 add_library(pixel_lab_native SHARED ${PIXEL_LAB_SOURCES})
 
+# The cpp root is on the include path so translation units can pull shared
+# headers with project-relative includes (e.g. "common/jni_common.h").
+target_include_directories(pixel_lab_native PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 find_library(log-lib log)
 target_link_libraries(pixel_lab_native ${log-lib})

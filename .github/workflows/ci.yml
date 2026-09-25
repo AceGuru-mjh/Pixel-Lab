@@ -53,17 +53,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/kotlinc-dist
+            ~/pl-kotlinc
             /tmp/pl-libs
-          key: kotlinc-2.0.21-libs-v1
+          key: kotlinc-2.0.21-libs-v2
 
       - name: Install Kotlin compiler 2.0.21
         run: |
-          if [ ! -x "$HOME/kotlinc-dist/bin/kotlinc" ]; then
+          # The official zip's top-level directory name has varied across
+          # releases (kotlinc/ vs kotlinc-dist/); extract, locate the
+          # binary, stage it under one fixed path.
+          if [ ! -x "$HOME/pl-kotlinc/bin/kotlinc" ]; then
             curl -sL -f https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip -o /tmp/kotlin.zip
-            unzip -q /tmp/kotlin.zip -d "$HOME"
+            rm -rf /tmp/kotlin-extract && mkdir -p /tmp/kotlin-extract
+            unzip -q /tmp/kotlin.zip -d /tmp/kotlin-extract
+            BIN=$(find /tmp/kotlin-extract -type f -name kotlinc | head -n 1)
+            [ -n "$BIN" ] || { echo "kotlinc binary not found in archive"; exit 1; }
+            mkdir -p "$HOME/pl-kotlinc"
+            cp -r "$(dirname "$(dirname "$BIN")")/." "$HOME/pl-kotlinc/"
           fi
-          "$HOME/kotlinc-dist/bin/kotlinc" -version
+          "$HOME/pl-kotlinc/bin/kotlinc" -version
 
       - name: Fetch pure-JVM compile libraries
         run: |
@@ -77,14 +85,14 @@ jobs:
       - name: Compile pixel-core main sources
         run: |
           CP="/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar"
-          "$HOME/kotlinc-dist/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-main \
+          "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-main \
             $(find pixel-core/src/main/kotlin -name '*.kt' | sort)
 
       - name: Compile pixel-core test sources
         run: |
           CP="/tmp/out-main:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar"
           if [ -d pixel-core/src/test/kotlin ] && find pixel-core/src/test/kotlin -name '*.kt' | grep -q .; then
-            "$HOME/kotlinc-dist/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-test \
+            "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-test \
               $(find pixel-core/src/test/kotlin -name '*.kt' | sort)
           else
             echo "No test sources present; skipping test compile."
@@ -122,15 +130,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/kotlinc-dist
+            ~/pl-kotlinc
             /tmp/pl-libs
-          key: kotlinc-2.0.21-testlibs-v1
+          key: kotlinc-2.0.21-testlibs-v2
 
       - name: Install Kotlin compiler + fetch runner libraries
         run: |
-          if [ ! -x "$HOME/kotlinc-dist/bin/kotlinc" ]; then
+          if [ ! -x "$HOME/pl-kotlinc/bin/kotlinc" ]; then
             curl -sL -f https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip -o /tmp/kotlin.zip
-            unzip -q /tmp/kotlin.zip -d "$HOME"
+            rm -rf /tmp/kotlin-extract && mkdir -p /tmp/kotlin-extract
+            unzip -q /tmp/kotlin.zip -d /tmp/kotlin-extract
+            BIN=$(find /tmp/kotlin-extract -type f -name kotlinc | head -n 1)
+            [ -n "$BIN" ] || { echo "kotlinc binary not found in archive"; exit 1; }
+            mkdir -p "$HOME/pl-kotlinc"
+            cp -r "$(dirname "$(dirname "$BIN")")/." "$HOME/pl-kotlinc/"
           fi
           mkdir -p /tmp/pl-libs
           fetch() { [ -f "/tmp/pl-libs/$2" ] || curl -sL -f -o "/tmp/pl-libs/$2" "$1"; }
@@ -145,7 +158,7 @@ jobs:
         run: |
           if find pixel-core/src/test/kotlin -name '*.kt' 2>/dev/null | grep -q .; then
             CP="/tmp/out-main:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar"
-            "$HOME/kotlinc-dist/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-test \
+            "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-test \
               $(find pixel-core/src/test/kotlin -name '*.kt' | sort)
           else
             echo "No test sources present; test run will be skipped."
@@ -217,10 +230,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: g++ syntax + warnings gate with JNI headers
+      - name: g++ syntax + warnings gate with JNI and NDK headers
         run: |
           CPP=pixel-core/src/main/cpp
           JNI_INC="-I$JAVA_HOME/include -I$JAVA_HOME/include/linux"
+          # jni_core.cpp includes <android/log.h> from the NDK sysroot;
+          # pick the newest installed NDK when one is present.
+          NDK_SYSROOT=$(ls -d $ANDROID_HOME/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/sysroot 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$NDK_SYSROOT" ]; then
+            JNI_INC="$JNI_INC -I$NDK_SYSROOT/usr/include -I$NDK_SYSROOT/usr/include/aarch64-linux-android"
+          else
+            echo "warning: no NDK found; android/* headers unavailable" >&2
+          fi
           FAIL=0
           for f in $(find $CPP -name '*.cpp' | sort); do
             echo "checking $f"

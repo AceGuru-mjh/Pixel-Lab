@@ -143,13 +143,19 @@ class PixelFrame private constructor(
     fun rotated180(): PixelFrame =
         transformed(width, height) { x, y -> pixels[(height - 1 - y) * width + (width - 1 - x)] }
 
-    /** Rotates 90 degrees clockwise; output dimensions are `height x width`. */
+    /**
+     * Rotates 90 degrees clockwise; output dimensions are `height x width`.
+     * Input pixel (`x`, `y`) lands at output (`height - 1 - y`, `x`).
+     */
     fun rotated90Cw(): PixelFrame =
-        transformed(height, width) { x, y -> pixels[(height - 1 - y) * width + x] }
+        transformed(height, width) { x, y -> pixels[(height - 1 - x) * width + y] }
 
-    /** Rotates 90 degrees counter-clockwise; output dimensions are `height x width`. */
+    /**
+     * Rotates 90 degrees counter-clockwise; output dimensions are `height x
+     * width`. Input pixel (`x`, `y`) lands at output (`y`, `width - 1 - x`).
+     */
     fun rotated90Ccw(): PixelFrame =
-        transformed(height, width) { x, y -> pixels[y * width + (height - 1 - x)] }
+        transformed(height, width) { x, y -> pixels[y * width + (width - 1 - y)] }
 
     /**
      * Shifts the whole frame by (`dx`, `dy`); areas shifted out are lost and

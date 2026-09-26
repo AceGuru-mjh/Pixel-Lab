@@ -271,7 +271,7 @@ object ProjectCodec {
             throw invalid("frames", "must contain at least 1 frame")
         }
         val frameIds = HashSet<Int>(framesArray.items.size)
-        val expectedPixels = width * height
+        val expectedPixels = width.toLong() * height.toLong()
         val frames = framesArray.items.mapIndexed { index, item ->
             val path = "frames[$index]"
             val obj = item as? PObject ?: throw invalid(path, "must be an object")
@@ -298,7 +298,7 @@ object ProjectCodec {
                 val celPath = "$path.cels[$layerId]"
                 val pixelsArray = celValue as? PArray
                     ?: throw invalid(celPath, "must be an array of ARGB integers")
-                if (pixelsArray.items.size != expectedPixels) {
+                if (pixelsArray.items.size.toLong() != expectedPixels) {
                     throw invalid(
                         celPath,
                         "length ${pixelsArray.items.size} does not match canvas ${width}x${height}",

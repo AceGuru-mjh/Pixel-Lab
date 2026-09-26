@@ -1,8 +1,14 @@
-# MCP Tools — 55 个工具参考
+# MCP Tools — 151 个工具参考（tier 1–4 全量）
 
-传输：JSON-RPC 2.0，`GET /sse`（事件流）+ `POST /messages`（请求/响应并镜像至 SSE）。
-会话：`session_id` 参数（缺省自动创建，LRU 32 上限）。
+传输：JSON-RPC 2.0，`GET /sse`（事件流）+ `POST /messages`（请求/响应并镜像至 SSE）；可选 RFC 6455 WebSocket 通道（`start(port, websocketPort)`）。请求体支持 Content-Length 与 chunked。
+会话：`session_id` 参数（缺省自动创建，LRU 32 上限；生成类工具无 `session_id` 时自动新建）。
+错误形状：参数错误 `-32602` / 工具崩溃 `isError` / 未知工具 `-32601`。
 图像纪律：所有导出工具返回 `byte_count` 与摘要，不返回 base64。
+派发：`McpToolRouter` 层级链（tier 1 canvas/draw/layer/frame/palette/anim/text/template/export/project 55 个 → tier 2 形状/画笔/选区/对称/样式 35 个 → tier 3 io/生成/图集/tilemap/管线 29 个 → tier 4 分析/变换/色彩/矢量 32 个），`tools/list` 每条带 `tier` 字段。
+
+## 画布尺寸纪律
+
+`canvas_create`/`project_new` 边长限制 `1..8192`；几何跨度超过 262144 步的线段直接拒绝（防 DoS）。
 
 ## canvas_*（8）
 

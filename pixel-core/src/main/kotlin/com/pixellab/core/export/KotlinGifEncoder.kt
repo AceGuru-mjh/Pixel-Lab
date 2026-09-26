@@ -5,8 +5,12 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 
 /**
- * Pure-Kotlin animated GIF89a encoder. Byte-for-byte mirrors the native
- * `NativeGifEncoder` bridge so hosts can switch implementations freely.
+ * Pure-Kotlin animated GIF89a encoder. Produces the same *logical* GIF as the
+ * native `NativeGifEncoder` bridge (palette layout, frame timings, disposal
+ * semantics), but the LZW bitstreams are NOT byte-identical: the native coder
+ * emits a leading CLEAR code and splits sub-blocks inside its BitWriter,
+ * while this coder defers both — see `Exporter`'s notes before relying on
+ * snapshot comparisons of encoder output.
  *
  * File layout:
  * - `GIF89a` header;

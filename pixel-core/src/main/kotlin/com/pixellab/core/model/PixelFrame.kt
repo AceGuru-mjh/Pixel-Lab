@@ -42,15 +42,24 @@ class PixelFrame private constructor(
          */
         fun of(width: Int, height: Int, pixels: IntArray): PixelFrame {
             require(width > 0 && height > 0) { "Frame dimensions must be positive (w=$width, h=$height)" }
-            require(pixels.size == width * height) {
+            // Long-domain: `width * height` on Ints wraps (e.g. 65536x65536
+            // == 0), which would let a 0-length array masquerade as a valid
+            // frame and later corrupt native heap writes.
+            require(pixels.size.toLong() == width.toLong() * height.toLong()) {
                 "Pixel array size ${pixels.size} does not match ${width}x${height}"
             }
             return PixelFrame(width, height, pixels)
         }
 
         /** Creates a fully transparent frame. */
-        fun blank(width: Int, height: Int): PixelFrame =
-            of(width, height, IntArray(width * height))
+        fun blank(width: Int, height: Int): PixelFrame {
+            require(width > 0 && height > 0) { "Frame dimensions must be positive (w=$width, h=$height)" }
+            val count = width.toLong() * height.toLong()
+            require(count <= Int.MAX_VALUE) {
+                "Frame ${width}x${height} needs $count pixels, beyond the Int array limit"
+            }
+            return of(width, height, IntArray(count.toInt()))
+        }
     }
 
     /** Total number of pixels (`width * height`). */

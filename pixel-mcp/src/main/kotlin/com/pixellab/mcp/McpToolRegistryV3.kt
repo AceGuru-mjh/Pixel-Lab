@@ -184,9 +184,26 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
         return requireNotNull(store.get(id, create = true)) { "session '$id' unavailable" }
     }
 
+    /**
+     * Session for generation tools: the one named by `session_id` when
+     * provided (auto-created when unknown), otherwise a brand-new session —
+     * matches the v1/v2 `template_apply` ergonomics so agents can generate
+     * without first creating a canvas.
+     */
+    private fun genSessionOf(params: JsonObject, store: PixelSessionStore): PixelSessionStore.SessionState {
+        if (params.raw("session_id") == null) return store.newSession()
+        return sessionOf(params, store)
+    }
+
     /** The (lazily created) v3 history of [sessionId]. */
     private fun historyFor(sessionId: String): CommandHistory =
         histories.getOrPut(sessionId) { CommandHistory() }
+
+    /** Drops tier-local per-session state: command history and tile maps. */
+    fun clearSessionState(sessionId: String) {
+        histories.remove(sessionId)
+        maps.remove(sessionId)
+    }
 
     /** Records a v3 edit into the session history and the session store. */
     private fun commit(
@@ -563,10 +580,10 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
 
         // ---- v3-gen: generators and cel effects ---------------------------------
 
-        add("gen_texture", "Generates a procedural texture (clouds/wood/stone/marble/bricks/checker) into a new single-frame session project.", "v3-gen",
+        add("gen_texture", "Generates a procedural texture (clouds/wood/stone/marble/bricks/checker) into a new single-frame session project (reuses session_id when given).", "v3-gen",
             "type" to "string", "width" to "integer", "height" to "integer",
             "palette_id" to "string", "colors" to "array", "seed" to "integer", "cell" to "integer",
-            "rings" to "integer", "veins" to "integer", "brick_w" to "integer", "brick_h" to "integer", "mortar" to "integer",
+            "rings" to "integer", "veins" to "integer", "brick_w" to "integer", "brick_h" to "integer", "mortar" to "integer", "session_id" to "string",
             required = listOf("type", "width", "height")) { params, store ->
             val type = params.opt("type", "").trim().lowercase()
             val width = params.int("width")
@@ -597,7 +614,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                     "'type' must be one of clouds, wood, stone, marble, bricks, checker (was '$type')",
                 )
             }
-            val session = sessionOf(params, store)
+            val session = genSessionOf(params, store)
             val project = SpriteFactory.create("texture-$type", width, height, palette)
                 .withActiveCel(frame)
             commit(store, session, "gen_texture ($type)", session.project, project)
@@ -616,9 +633,9 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             }
         }
 
-        add("gen_sprite", "Generates a procedural sprite (tree/rock/gem/ship) into a new single-frame session project.", "v3-gen",
+        add("gen_sprite", "Generates a procedural sprite (tree/rock/gem/ship) into a new single-frame session project (reuses session_id when given).", "v3-gen",
             "type" to "string", "size" to "integer", "width" to "integer", "height" to "integer",
-            "colors" to "array", "seed" to "integer",
+            "colors" to "array", "seed" to "integer", "session_id" to "string",
             required = listOf("type")) { params, store ->
             val type = params.opt("type", "").trim().lowercase()
             val explicitWidth = params.raw("width")
@@ -676,7 +693,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                     "'type' must be one of tree, rock, gem, ship (was '$type')",
                 )
             }
-            val session = sessionOf(params, store)
+            val session = genSessionOf(params, store)
             val palette = Palette(
                 "gen-$type", "Generated $type",
                 distinctColors(listOf(frame), 256) ?: BuiltInPalettes.PICO8.colors,
@@ -700,7 +717,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             }
         }
 
-        add("gen_noise_field", "Generates a tileable fBm value-noise grayscale field into a new single-frame session project.", "v3-gen",
+        add("gen_noise_field", "Generates a tileable fBm value-noise grayscale field into a new single-frame session project (reuses session_id when given).", "v3-gen",
             "width" to "integer", "height" to "integer", "seed" to "integer",
             "tile" to "integer", "octaves" to "integer", "session_id" to "string",
             required = listOf("width", "height")) { params, store ->
@@ -723,7 +740,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                 }
             }
             val frame = PixelFrame.of(width, height, pixels)
-            val session = sessionOf(params, store)
+            val session = genSessionOf(params, store)
             val palette = Palette(
                 "noise-gray", "Noise grayscale",
                 distinctColors(listOf(frame), 256) ?: intArrayOf(0xFF000000.toInt(), 0xFFFFFFFF.toInt()),

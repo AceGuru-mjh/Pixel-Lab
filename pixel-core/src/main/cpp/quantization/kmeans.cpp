@@ -182,12 +182,12 @@ void kmeans(const uint32_t* pixels, size_t count, int targetColors,
                                    });
         if (it != colors.end() && (*it & 0xFFFFFF) == (pixels[i] & 0xFFFFFF)) {
             const size_t colorIdx = static_cast<size_t>(it - colors.begin());
-            out.mapped[i] = out.palette[static_cast<size_t>(remap[assignment[colorIdx]])];
+            out.mapped[i] = (out.palette[static_cast<size_t>(remap[assignment[colorIdx]])] & 0x00FFFFFFu) | (pixels[i] & 0xFF000000u);
             continue;
         }
         auto hit = exact.find(pixels[i] & 0xFFFFFF);
         if (hit != exact.end()) {
-            out.mapped[i] = out.palette[static_cast<size_t>(hit->second)];
+            out.mapped[i] = (out.palette[static_cast<size_t>(hit->second)] & 0x00FFFFFFu) | (pixels[i] & 0xFF000000u);
         }
     }
 }

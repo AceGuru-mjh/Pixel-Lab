@@ -27,6 +27,9 @@ import com.pixellab.mcp.json.jsonobj
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+/** Upper bound for a canvas edge accepted from MCP requests (entry guard). */
+private const val MAX_CANVAS_EDGE: Int = 8192
+
 /**
  * One MCP tool: snake_case [name], one-line [description], grouping [category]
  * and the [handler] closure mapping a parameter [JsonObject] plus the session
@@ -105,6 +108,14 @@ class McpToolRegistry(private val lab: PixelLab) {
     private fun sessionOf(params: JsonObject, store: PixelSessionStore): PixelSessionStore.SessionState {
         val id = params.string("session_id")
         return requireNotNull(store.get(id, create = true)) { "session '$id' unavailable" }
+    }
+
+    /** Canvas-size entry guard: bounds each edge to [1, 8192] so no request
+     * can steer the session store into degenerate dimensions. */
+    private fun requireSize(width: Int, height: Int) {
+        require(width in 1..MAX_CANVAS_EDGE && height in 1..MAX_CANVAS_EDGE) {
+            "canvas edges must be in [1, $MAX_CANVAS_EDGE] (was ${width}x${height})"
+        }
     }
 
     /** Runs [op] on the session's project and writes the result back. */
@@ -385,10 +396,13 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         // ---- canvas ----
 
-        add("canvas_create", "Creates a new blank canvas session (16x16 pico-8 by default).", "canvas",
+        add("canvas_create", "Creates a new blank canvas session (16x16 pico-8 by default; each edge must stay within 1..8192).", "canvas",
             "width" to "integer", "height" to "integer", "palette_id" to "string", "name" to "string") { params, store ->
             val palette = paletteParam(params) ?: BuiltInPalettes.PICO8
-            val session = store.newSession(palette, params.opt("width", 16), params.opt("height", 16), params.opt("name", "untitled"))
+            val width = params.opt("width", 16)
+            val height = params.opt("height", 16)
+            requireSize(width, height)
+            val session = store.newSession(palette, width, height, params.opt("name", "untitled"))
             projectSummary(session, session.project)
         }
 
@@ -442,10 +456,20 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         // ---- draw ----
 
-        add("draw_pixel", "Paints one pixel on the active cel.", "draw",
+        add("draw_pixel", "Paints one pixel on the active cel. Out-of-range coordinates are skipped and reported via `clipped: true`.", "draw",
             "session_id" to "string", "x" to "integer", "y" to "integer", "color" to "string",
             required = listOf("session_id", "x", "y", "color")) { params, store ->
-            mutate(params, store) { lab.engine.drawPixel(it, params.int("x"), params.int("y"), colorParam(params, "color")) }
+            val session = sessionOf(params, store)
+            val x = params.int("x")
+            val y = params.int("y")
+            val project = session.project
+            val outOfBounds = x !in 0 until project.width || y !in 0 until project.height
+            val summary = mutate(params, store) { lab.engine.drawPixel(it, x, y, colorParam(params, "color")) }
+            if (outOfBounds) jsonobj {
+                for ((key, value) in summary.entries) put(key, value)
+                put("clipped", true)
+                put("reason", "coordinate ($x, $y) outside ${project.width}x${project.height} canvas; pixel not drawn")
+            } else summary
         }
 
         add("draw_line", "Draws a Bresenham line (x0,y0)-(x1,y1) with optional thickness.", "draw",
@@ -950,10 +974,13 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         // ---- project ----
 
-        add("project_new", "Creates a new blank project session (alias of canvas_create).", "project",
+        add("project_new", "Creates a new blank project session (alias of canvas_create; each edge must stay within 1..8192).", "project",
             "name" to "string", "width" to "integer", "height" to "integer", "palette_id" to "string") { params, store ->
             val palette = paletteParam(params) ?: BuiltInPalettes.PICO8
-            val session = store.newSession(palette, params.opt("width", 16), params.opt("height", 16), params.opt("name", "untitled"))
+            val width = params.opt("width", 16)
+            val height = params.opt("height", 16)
+            requireSize(width, height)
+            val session = store.newSession(palette, width, height, params.opt("name", "untitled"))
             projectSummary(session, session.project)
         }
 

@@ -431,7 +431,10 @@ class WebSocketServer(
         } catch (error: Exception) {
             logger?.invoke("conn#${connection.id}: handler failed: ${error.message}")
             sendClose(connection, 1011, "handler error")
-            return
+            // RFC 6455 §5.5.1: after sending a close frame the endpoint MUST
+            // NOT send any further data frames — terminate the pump so the
+            // connection cannot linger half-closed.
+            throw IOException("connection closed after handler error")
         }
         if (reply != null) {
             logger?.invoke("conn#${connection.id}: <- ${reply.length} chars")

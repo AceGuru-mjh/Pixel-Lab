@@ -12,7 +12,9 @@ import com.pixellab.mcp.json.JsonString
 import com.pixellab.mcp.json.jsonarray
 import com.pixellab.mcp.json.jsonobj
 import com.pixellab.mcp.transport.HttpSseServer
+import com.pixellab.mcp.transport.WebSocketServer
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.runBlocking
 
 /**
  * Model Context Protocol server for Pixel Lab (contract §8).
@@ -38,39 +40,84 @@ import kotlin.coroutines.cancellation.CancellationException
  * observe the same traffic. [start] is guarded (a second start throws
  * [IllegalStateException]) and [stop] is idempotent.
  *
+ * ## Tool routing
+ *
+ * Tools are dispatched through [McpToolRouter], the tier chain over all
+ * four registries (v1 canvas/draw/layer/frame/palette/animation/export,
+ * v2 text/convert/brush/symmetry, v3 tilemap/atlas/history/worldgen,
+ * v4 analysis/transform/color/vector) — every tool is reachable over the
+ * wire, and `tools/list` reports each tool's owning tier.
+ *
+ * ## Transports
+ *
+ * `start(port)` brings up the HTTP + SSE transport (JSON-RPC over
+ * `POST /messages`, mirror stream on `GET /sse`). Passing a non-null
+ * `websocketPort` additionally boots the RFC 6455 WebSocket transport on
+ * its own loopback port — same JSON-RPC messages framed as text frames
+ * instead of HTTP bodies; JSON-RPC notifications (no `id`) answer no frame
+ * at all, mirroring the `202` semantics of the HTTP side.
+ *
  * Sessions live in an in-memory [PixelSessionStore]; calling [stop] drops
  * them, which makes restarts deterministic.
  */
 class PixelMcpServer(private val config: PixelLabConfig = PixelLabConfig.default()) {
 
-    /** Tool identity triple exposed by [listTools]. */
-    data class McpToolInfo(val name: String, val description: String, val category: String)
+    /** Tool identity exposed by [listTools]: name, description, category, tier. */
+    data class McpToolInfo(val name: String, val description: String, val category: String, val tier: Int)
 
-    /** Start receipt: the bound port and the wall-clock start time. */
-    data class PixelMcpHandle(val port: Int, val startedAtMs: Long)
+    /** Start receipt: the bound ports and the wall-clock start time. */
+    data class PixelMcpHandle(val port: Int, val websocketPort: Int?, val startedAtMs: Long)
 
     private val lab: PixelLab = PixelLab.create(config)
-    private val registry: McpToolRegistry = McpToolRegistry(lab)
-    private val store: PixelSessionStore = PixelSessionStore()
+    private val router: McpToolRouter = McpToolRouter(lab)
+    private val store: PixelSessionStore = PixelSessionStore(
+        onProjectDiscarded = { projectId -> lab.engine.clearHistory(projectId) },
+        onSessionDiscarded = { sessionId -> router.clearSessionState(sessionId) },
+    )
     private val transport: HttpSseServer = HttpSseServer { body, respond -> handleMessage(body, respond) }
+    private var websockets: WebSocketServer? = null
     private val stateLock = Any()
     private var handle: PixelMcpHandle? = null
 
     /**
-     * Starts listening on [port] (0 = ephemeral port).
+     * Starts the HTTP+SSE transport listening on [port] (0 = ephemeral
+     * port). When [websocketPort] is non-null, the RFC 6455 WebSocket
+     * transport boots on that port as well, sharing the same JSON-RPC
+     * router and session store.
      *
      * @throws IllegalStateException when the server is already running.
      */
-    fun start(port: Int): PixelMcpHandle {
+    fun start(port: Int, websocketPort: Int? = null): PixelMcpHandle {
         synchronized(stateLock) {
             handle?.let { throw IllegalStateException("PixelMcpServer is already running on port ${it.port}") }
             transport.start(port)
             val boundPort = transport.port ?: port
-            val started = PixelMcpHandle(boundPort, System.currentTimeMillis())
+            val boundWsPort = websocketPort?.let { bootWebSocket(it) }
+            val started = PixelMcpHandle(boundPort, boundWsPort, System.currentTimeMillis())
             handle = started
-            config.effectiveLogger.i(TAG, "started on port $boundPort with ${registry.tools.size} tools")
+            config.effectiveLogger.i(
+                TAG,
+                "started on port $boundPort" + (boundWsPort?.let { " (ws $it)" } ?: "") + " with ${router.toolCount()} tools",
+            )
             return started
         }
+    }
+
+    /** Boots the WebSocket transport bridged onto the shared JSON-RPC router. */
+    private fun bootWebSocket(port: Int): Int {
+        val server = WebSocketServer(
+            port,
+            handler = { body ->
+                val reply = ArrayList<String>(1)
+                runBlocking {
+                    handleMessage(body) { text -> if (text.isNotEmpty()) reply.add(text) }
+                }
+                reply.singleOrNull()
+            },
+            logger = { line -> config.effectiveLogger.d(TAG, "ws: $line") },
+        )
+        websockets = server
+        return server.port
     }
 
     /** Stops the server and drops all sessions; safe to call repeatedly. */
@@ -81,21 +128,27 @@ class PixelMcpServer(private val config: PixelLabConfig = PixelLabConfig.default
             handle = null
         }
         transport.stop()
+        websockets?.close()
+        websockets = null
         store.clear()
         config.effectiveLogger.i(TAG, "stopped (was listening on port ${previous.port})")
     }
 
-    /** Whether the transport is currently accepting connections. */
+    /** Whether the HTTP transport is currently accepting connections. */
     val isRunning: Boolean get() = transport.isRunning
 
-    /** The bound port while running, null while stopped. */
+    /** The bound HTTP port while running, null while stopped. */
     val port: Int? get() = transport.port
 
-    /** Number of registered tools. */
-    fun toolCount(): Int = registry.tools.size
+    /** The bound WebSocket port while running, null when not booted. */
+    val websocketPort: Int? get() = websockets?.port
+
+    /** Number of dispatchable tools across every registry tier. */
+    fun toolCount(): Int = router.toolCount()
 
     /** Registered tool identities in contract order. */
-    fun listTools(): List<McpToolInfo> = registry.tools.map { McpToolInfo(it.name, it.description, it.category) }
+    fun listTools(): List<McpToolInfo> =
+        router.tools.map { McpToolInfo(it.name, it.description, it.category, router.tierOf(it.name) ?: 0) }
 
     /** The backing session store (for hosts embedding the server in-process). */
     fun sessionStore(): PixelSessionStore = store
@@ -172,7 +225,7 @@ class PixelMcpServer(private val config: PixelLabConfig = PixelLabConfig.default
         }
         val arguments = (params.raw("arguments") as? JsonObject) ?: JsonObject(emptyMap())
         try {
-            val result = registry.execute(name, arguments, store)
+            val result = router.execute(name, arguments, store)
             val envelope = jsonobj {
                 put(
                     "content",
@@ -234,24 +287,25 @@ class PixelMcpServer(private val config: PixelLabConfig = PixelLabConfig.default
         }
     }
 
-    /** `tools/list` result: one entry per registered tool. */
+    /** `tools/list` result: one entry per dispatchable tool. */
     private fun toolsListResult(): JsonObject = jsonobj {
         put(
             "tools",
             jsonarray {
-                for (tool in registry.tools) {
+                for (tool in router.tools) {
                     add(
                         jsonobj {
                             put("name", tool.name)
                             put("description", tool.description)
                             put("category", tool.category)
-                            put("inputSchema", registry.inputSchema(tool.name))
+                            put("tier", router.tierOf(tool.name) ?: 0)
+                            put("inputSchema", router.inputSchema(tool.name))
                         },
                     )
                 }
             },
         )
-        put("toolCount", registry.tools.size)
+        put("toolCount", router.toolCount())
     }
 
     private companion object {

@@ -19,8 +19,18 @@ import java.util.concurrent.ConcurrentHashMap
  * exceeds [maxSessions] (LRU cap, default 32) the least-recently-used session
  * is evicted — `lastUsed` is refreshed by every [get]/[update], making idle
  * agent conversations the first to go.
+ *
+ * Memory discipline: engine undo stacks key by *project id*, so a discarded
+ * project's history would otherwise live forever. The optional
+ * [onProjectDiscarded] listener fires for every project that leaves the
+ * store's ownership — LRU eviction, [remove] and id swaps during [update] —
+ * letting the host drop the matching undo/redo state.
  */
-class PixelSessionStore(private val maxSessions: Int = DEFAULT_MAX_SESSIONS) {
+class PixelSessionStore(
+    private val maxSessions: Int = DEFAULT_MAX_SESSIONS,
+    private val onProjectDiscarded: ((projectId: String) -> Unit)? = null,
+    private val onSessionDiscarded: ((sessionId: String) -> Unit)? = null,
+) {
 
     /** One live MCP editing session. */
     class SessionState(
@@ -89,6 +99,12 @@ class PixelSessionStore(private val maxSessions: Int = DEFAULT_MAX_SESSIONS) {
     fun update(id: String, project: SpriteProject): SessionState? {
         val session = sessions[id] ?: return null
         synchronized(evictionLock) {
+            val previous = session.project
+            if (previous.id != project.id) {
+                // The session swapped to a different project lineage (template
+                // apply, project load): the old project's history is orphaned.
+                onProjectDiscarded?.invoke(previous.id)
+            }
             session.project = project
             session.touch()
         }
@@ -96,10 +112,19 @@ class PixelSessionStore(private val maxSessions: Int = DEFAULT_MAX_SESSIONS) {
     }
 
     /** Drops the session with [id]; true when it existed. */
-    fun remove(id: String): Boolean = sessions.remove(id) != null
+    fun remove(id: String): Boolean {
+        val session = sessions.remove(id) ?: return false
+        onProjectDiscarded?.invoke(session.project.id)
+        onSessionDiscarded?.invoke(session.id)
+        return true
+    }
 
     /** Drops every session. */
     fun clear() {
+        for (session in sessions.values) {
+            onProjectDiscarded?.invoke(session.project.id)
+            onSessionDiscarded?.invoke(session.id)
+        }
         sessions.clear()
     }
 
@@ -126,6 +151,8 @@ class PixelSessionStore(private val maxSessions: Int = DEFAULT_MAX_SESSIONS) {
         while (sessions.size > maxSessions) {
             val oldest = sessions.values.minByOrNull { it.lastUsedMs } ?: break
             sessions.remove(oldest.id)
+            onProjectDiscarded?.invoke(oldest.project.id)
+            onSessionDiscarded?.invoke(oldest.id)
         }
     }
 

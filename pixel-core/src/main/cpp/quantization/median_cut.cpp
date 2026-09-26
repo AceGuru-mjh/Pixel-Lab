@@ -199,7 +199,7 @@ void medianCut(const uint32_t* pixels, size_t count, int targetColors,
         }
         auto hit = exact.find(pixels[i] & 0xFFFFFF);
         if (hit != exact.end()) {
-            out.mapped[i] = out.palette[static_cast<size_t>(hit->second)];
+            out.mapped[i] = (out.palette[static_cast<size_t>(hit->second)] & 0x00FFFFFFu) | (pixels[i] & 0xFF000000u);
             continue;
         }
         int best = 0;
@@ -211,7 +211,7 @@ void medianCut(const uint32_t* pixels, size_t count, int targetColors,
                 best = static_cast<int>(p);
             }
         }
-        out.mapped[i] = out.palette[static_cast<size_t>(best)];
+        out.mapped[i] = (out.palette[static_cast<size_t>(best)] & 0x00FFFFFFu) | (pixels[i] & 0xFF000000u);
     }
 }
 

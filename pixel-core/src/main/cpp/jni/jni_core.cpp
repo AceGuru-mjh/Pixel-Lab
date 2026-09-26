@@ -104,9 +104,9 @@ Java_com_pixellab_core_nativelib_NativeDitherer_nativeDither(
         return;
     }
     if (width <= 0 || height <= 0 || paletteCount < 1 ||
-        env->GetArrayLength(pixels) != width * height ||
+        static_cast<jlong>(env->GetArrayLength(pixels)) != static_cast<jlong>(width) * height ||
         env->GetArrayLength(palette) != paletteCount ||
-        env->GetArrayLength(outPixels) != width * height) {
+        static_cast<jlong>(env->GetArrayLength(outPixels)) != static_cast<jlong>(width) * height) {
         pixel_lab::throwIAE(env, "dither argument shape mismatch");
         return;
     }
@@ -122,7 +122,7 @@ Java_com_pixellab_core_nativelib_NativeDitherer_nativeDither(
                            static_cast<size_t>(paletteCount), kernel, intensity,
                            reinterpret_cast<uint32_t*>(in.get()));
     // The in-place result in the pinned input buffer is copied to the output.
-    env->SetIntArrayRegion(outPixels, 0, width * height, in.get());
+    env->SetIntArrayRegion(outPixels, 0, env->GetArrayLength(outPixels), in.get());
 }
 
 // ---- NativePixelOps ----------------------------------------------------------
@@ -137,8 +137,8 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeSetPixelsBatch(
     }
     if (width <= 0 || height <= 0 || pointCount < 0 ||
         env->GetArrayLength(points) != pointCount * 2 ||
-        env->GetArrayLength(pixels) != width * height ||
-        env->GetArrayLength(out) != width * height) {
+        static_cast<jlong>(env->GetArrayLength(pixels)) != static_cast<jlong>(width) * height ||
+        static_cast<jlong>(env->GetArrayLength(out)) != static_cast<jlong>(width) * height) {
         pixel_lab::throwIAE(env, "batch write argument shape mismatch");
         return -1;
     }
@@ -151,7 +151,7 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeSetPixelsBatch(
         reinterpret_cast<const uint32_t*>(in.get()), width, height, pts.get(),
         static_cast<size_t>(pointCount), static_cast<uint32_t>(argb),
         reinterpret_cast<uint32_t*>(in.get()));
-    env->SetIntArrayRegion(out, 0, width * height, in.get());
+    env->SetIntArrayRegion(out, 0, env->GetArrayLength(out), in.get());
     return static_cast<jint>(written);
 }
 
@@ -164,8 +164,8 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeFloodFill(
         return -1;
     }
     if (width <= 0 || height <= 0 ||
-        env->GetArrayLength(pixels) != width * height ||
-        env->GetArrayLength(out) != width * height) {
+        static_cast<jlong>(env->GetArrayLength(pixels)) != static_cast<jlong>(width) * height ||
+        static_cast<jlong>(env->GetArrayLength(out)) != static_cast<jlong>(width) * height) {
         pixel_lab::throwIAE(env, "flood fill argument shape mismatch");
         return -1;
     }
@@ -177,7 +177,7 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeFloodFill(
         reinterpret_cast<const uint32_t*>(in.get()), width, height, x, y,
         static_cast<uint32_t>(replacement), tolerance,
         reinterpret_cast<uint32_t*>(in.get()));
-    env->SetIntArrayRegion(out, 0, width * height, in.get());
+    env->SetIntArrayRegion(out, 0, env->GetArrayLength(out), in.get());
     return static_cast<jint>(changed);
 }
 

@@ -36,11 +36,38 @@ fun providePixelLab(): PixelLab = PixelLab.create(
 
 ```kotlin
 val server = PixelMcpServer(PixelLabConfig.default())
-val handle = server.start(8090)   // SSE: http://127.0.0.1:8090/sse
-// 宿主用现成 mcp_connect HTTP/SSE 传输接入，55 个工具即刻可用
+val handle = server.start(8090)                    // SSE: http://127.0.0.1:8090/sse
+// 可选 WebSocket 通道（同一路由/会话存储）：
+val handle = server.start(8090, websocketPort = 8091)
+// 宿主用现成 mcp_connect HTTP/SSE 传输接入，151 个工具即刻可用
 ```
 
-零外部依赖（java.net.ServerSocket + 手写 HTTP/SSE/JSON），不会与宿主 OkHttp/Ktor 版本冲突。工具输出纪律：图像数据只返回字节数与摘要，**绝不返回 base64 大图**（宿主 ToolOutputTruncator 头 1200 + 尾 600 字符截断）。
+零外部依赖（java.net.ServerSocket + 手写 HTTP/SSE/WS/JSON），不会与宿主 OkHttp/Ktor 版本冲突。请求体同时支持 `Content-Length` 与 `Transfer-Encoding: chunked`；SSE 流每 15 s 推送 keepalive 注释帧防止代理回收。工具输出纪律：图像数据只返回字节数与摘要，**绝不返回 base64 大图**（宿主 ToolOutputTruncator 头 1200 + 尾 600 字符截断）。
+
+### 工具分层（`tools/list` 里的 `tier` 字段）
+
+| tier | 注册表 | 覆盖 | 数量 |
+|:---|:---|:---|:---|
+| 1 | `McpToolRegistry` | canvas/draw/layer/frame/palette/anim/text/template/export/project | 55 |
+| 2 | `McpToolRegistryV2` | 形状/画笔/选区/对称/文本样式/转换管线 | 35 |
+| 3 | `McpToolRegistryV3` | io 导入导出/生成器/精灵图集/tilemap/管线/历史 | 29 |
+| 4 | `McpToolRegistryV4` | 分析/变换/色彩科学/矢量导出 | 32 |
+
+调用经 `McpToolRouter` 层级链派发（v1→v2→v3→v4，`-32601` 仅在四层都未认领时出现）。
+
+### 内存纪律
+
+`PixelSessionStore` 的 LRU（32 会话）驱逐、`remove` 与项目 id 替换都会触发 `onProjectDiscarded`/`onSessionDiscarded` 回调；`PixelMcpServer` 默认把它们接到 `engine.clearHistory` 与 v3/v4 会话态清理——驱逐的会话不会在撤销栈里泄漏项目快照。自建 store 的宿主应做同样接线。
+
+### 错误形状契约
+
+* 参数校验失败（含 v1–v4 全部层级）→ JSON-RPC `-32602`；
+* 工具内部崩溃 → `isError: true` 内容信封；
+* 未知工具 → `-32601`；未知方法 → `-32601`；JSON 解析失败 → `-32700`。
+
+### 会话语义
+
+生成类工具（`gen_texture`/`gen_sprite`/`gen_noise_field` 与 `template_apply` 系列）不传 `session_id` 时自动新建会话并在响应中返回 `session_id`；其他读写工具按 schema 声明要求 `session_id`（缺省时自动创建同名会话）。越界 `draw_pixel` 返回 `clipped: true` 与原因说明。
 
 ## 路径 C：BUILTIN 进程内 transport（性能最优）
 

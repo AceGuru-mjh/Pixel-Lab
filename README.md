@@ -10,7 +10,7 @@
 |:---|:---|:---|
 | `pixel-core` | 主战场 | 数据模型（PixelFrame/SpriteProject）、绘制引擎+撤销栈、动画引擎、模板/字体、量化/抖动/转换管线、PNG/GIF/APNG/精灵表/Codex 宠物包导出、C++/NDK 热路径 |
 | `pixel-ui-compose` | Compose 原子组件 | PixelCanvas（缩放/平移/笔画预览/洋葱皮/网格）、PalettePanel、TimelineStrip、LayerPanel |
-| `pixel-mcp` | MCP 服务器 | JSON-RPC 2.0 over SSE、55 工具、会话存储、零外部依赖（手写 HTTP/JSON） |
+| `pixel-mcp` | MCP 服务器 | JSON-RPC 2.0 over SSE + 可选 WebSocket、四层注册表 151 工具（tier-chain 路由）、会话存储、零外部依赖（手写 HTTP/SSE/WS/JSON） |
 | `sample-app` | 演示 | 单 Activity 全功能画板 + Agent 指令行 + 四格式导出 |
 
 ## 快速开始
@@ -58,12 +58,14 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 
 ## 验证状态
 
-- 全模块 kotlinc 2.0.21 编译 0 error
+- 全模块 kotlinc 2.0.21 编译 0 error（CI 含 pixel-mcp JVM 门禁）
 - C++ 全文件 g++ `-Wall -Wextra` 语法干净 + ASan/UBSan 行为冒烟全绿（量化 3 算法确定性/抖动 7 核/洪泛/合成/LZW 回环/GIF 结构）
 - GIF/PNG/APNG 编码经 JDK ImageIO / 独立解码器像素级验证
 - MCP 服务器真实端口冒烟：initialize → tools/list → tools/call → SSE 事件流 + **WebSocket（RFC 6455 握手/掩码/分片/ping/close 1002 活体测试）**
-- 十一个增强 PR（+26,112 行）逐一通过行为冒烟后合并（PR7-11 冒烟合计 565 断言全绿）
+- **集成验证（本轮）**：26/26 协议探针（含 chunked POST / 100-Continue 大请求体 / SSE 镜像 / WS 双向 / 全四层工具可达）+ 151 工具全量冒烟（0 崩溃 0 未知工具）+ **Agent 理解力实测**（真实 LLM 仅凭 tools/list 对 8 条中文用户需求的工具选择与参数 8/8 正确执行）
+- 十二个增强 PR 逐一通过行为冒烟后合并（PR7-11 冒烟合计 565 断言全绿）
 - 冒烟测试修复过的真实缺陷：JDK Inflater 零容量自旋、Aseprite 现行规范 3 处布局偏差、PixelFrame.rotated90Ccw 索引笔误
+- **本轮修复**（集成验证驱动）：①96/151 工具从未接线（tier-chain 路由器补齐）②WebSocket 传输从未启动（接入 `start(port, wsPort)`）③`100-Continue` 用 `use{}` 关闭 socket（大请求体必挂）④`width*height` Int 溢出可致 native 堆越界（Long 域校验 + 8192 边长门禁）⑤画线无界坐标 DoS（跨度上限）⑥v4 参数错误错误形状（补 -32602 映射）⑦撤销历史随会话驱逐泄漏（双回调清理）⑧native 量化丢 alpha（镜像 Kotlin 契约）⑨HTTP 不支持 chunked⑩`\u+041` 非法转义被接受
 
 ## 规模与演进
 
@@ -86,7 +88,8 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #44 | 世界生成：Worley/BSP 地牢/元胞洞穴/生物群系 + L-系统 + 确定性粒子系统 | +1,772 行 |
 | PR #45 | 色彩科学 + 矢量：Machado/Viénot 色盲模拟 + WCAG 对比度审计 + CSS 命名 + 开尔文色温 + MarchingSquares + SVG/SMIL 导出 | +1,833 行 |
 | PR #46 | MCP v4：32 新工具（总 **151**）+ 配方 13-18 | +1,249 行 |
-| **合计** | | **49,680 行**（Kotlin 47,538 + C++ 2,142），**151 个 MCP 工具** |
+| PR #47 | **集成验证与加固**：tier-chain 路由（151 工具全上线）+ WS 传输接线 + 10 项缺陷修复（含 100-Continue/Int 溢出/无界画线/历史泄漏）+ Agent 理解力实测 8/8 + CI 加 pixel-mcp 门禁 | +~600 行净增（含修复） |
+| **合计** | | **49,680+ 行**（Kotlin 47,538+ + C++ 2,142+），**151 个 MCP 工具** |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

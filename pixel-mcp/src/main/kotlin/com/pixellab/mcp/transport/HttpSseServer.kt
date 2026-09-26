@@ -66,6 +66,9 @@ class HttpSseServer(
 
         /** Hard cap on simultaneously registered SSE clients. */
         private const val MAX_SSE_CLIENTS: Int = 32
+
+        /** Idle SSE heartbeat interval (ms) keeping streams open across proxies. */
+        private const val SSE_HEARTBEAT_MS: Long = 15_000
     }
 
     private var serverSocket: ServerSocket? = null
@@ -208,15 +211,24 @@ class HttpSseServer(
 
     /** POST /messages (and /mcp): body in, JSON-RPC response out (HTTP + SSE). */
     private suspend fun handlePost(socket: Socket, input: InputStream, headers: Map<String, String>) {
+        val body: String
+        val chunked = headers["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true
         val length = headers["content-length"]?.toIntOrNull() ?: 0
-        if (length < 0 || length > MAX_BODY_BYTES) {
-            writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
-            return
-        }
-        honorExpect100Continue(socket, headers)
-        val body = if (length == 0) "" else readBody(input, length) ?: run {
-            writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
-            return
+        if (chunked) {
+            body = readChunkedBody(input) ?: run {
+                writeStatus(socket, 400, "{\"error\":\"bad_chunked_body\"}")
+                return
+            }
+        } else {
+            if (length < 0 || length > MAX_BODY_BYTES) {
+                writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
+                return
+            }
+            honorExpect100Continue(socket, headers)
+            body = if (length == 0) "" else readBody(input, length) ?: run {
+                writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
+                return
+            }
         }
         val responded = AtomicBoolean(false)
         onMessage(body) { text ->
@@ -237,10 +249,12 @@ class HttpSseServer(
         val expect = headers["expect"] ?: return
         if (!expect.contains("100-continue", ignoreCase = true)) return
         try {
-            socket.getOutputStream().use { raw ->
-                raw.write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.UTF_8))
-                raw.flush()
-            }
+            // NOTE: deliberately no `use {}` — closing a socket's OutputStream
+            // closes the whole socket (JDK contract), which would sever the
+            // connection before the request body and response can flow.
+            val raw = socket.getOutputStream()
+            raw.write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.UTF_8))
+            raw.flush()
         } catch (error: IOException) {
             // The body read below will surface the real failure.
         }
@@ -273,6 +287,13 @@ class HttpSseServer(
         clients.add(client)
         pushToOne(client, "endpoint", "/messages")
         // Hold the stream open until the client disconnects; discards any bytes.
+        val heartbeat = scope?.launch {
+            while (running) {
+                kotlinx.coroutines.delay(SSE_HEARTBEAT_MS)
+                // Idle comment frame keeps intermediaries from reaping the stream.
+                if (client in clients) pushComment(client)
+            }
+        }
         try {
             val discard = ByteArray(1024)
             while (running && input.read(discard) != -1) {
@@ -281,6 +302,19 @@ class HttpSseServer(
         } catch (error: IOException) {
             // Disconnect: fall through to cleanup.
         } finally {
+            heartbeat?.cancel()
+            dropClient(client)
+        }
+    }
+
+    /** Writes one SSE comment frame (`: keepalive`) to [client]. */
+    private fun pushComment(client: SseClient) {
+        try {
+            synchronized(client.writeLock) {
+                client.out.write(": keepalive\n\n".toByteArray(StandardCharsets.UTF_8))
+                client.out.flush()
+            }
+        } catch (error: IOException) {
             dropClient(client)
         }
     }
@@ -376,6 +410,45 @@ class HttpSseServer(
             offset += read
         }
         return String(bytes, StandardCharsets.UTF_8)
+    }
+
+    /**
+     * Decodes a `Transfer-Encoding: chunked` request body (RFC 9112 §7.1):
+     * repeated `<hex-size>[;ext] CRLF data CRLF` chunks terminated by the
+     * zero-size chunk and trailer section. Null on malformed framing or
+     * when the reassembled body would exceed [MAX_BODY_BYTES].
+     */
+    private fun readChunkedBody(input: InputStream): String? {
+        val out = java.io.ByteArrayOutputStream()
+        while (true) {
+            val sizeLine = readLine(input) ?: return null
+            val size = sizeLine.substringBefore(';').trim().toIntOrNull(16) ?: return null
+            if (size < 0 || out.size() + size > MAX_BODY_BYTES) return null
+            if (size == 0) {
+                // Trailer section: consume lines until the blank terminator.
+                while (true) {
+                    val trailer = readLine(input) ?: return null
+                    if (trailer.isEmpty()) break
+                }
+                return out.toString("UTF-8")
+            }
+            val chunk = readBodyBytes(input, size) ?: return null
+            out.write(chunk)
+            val crlf = readLine(input) ?: return null
+            if (crlf.isNotEmpty()) return null
+        }
+    }
+
+    /** Reads exactly [length] raw bytes; null when the stream ends early. */
+    private fun readBodyBytes(input: InputStream, length: Int): ByteArray? {
+        val bytes = ByteArray(length)
+        var offset = 0
+        while (offset < length) {
+            val read = input.read(bytes, offset, length - offset)
+            if (read == -1) return null
+            offset += read
+        }
+        return bytes
     }
 
     private fun closeQuietly(socket: Socket?) {

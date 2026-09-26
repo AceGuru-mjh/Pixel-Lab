@@ -118,7 +118,13 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
     suspend fun execute(name: String, args: JsonObject, store: PixelSessionStore): JsonObject {
         val tool = tools.firstOrNull { it.name == name }
             ?: throw McpToolException("unknown v4 tool '$name'", JsonRpc.METHOD_NOT_FOUND)
-        return mutex.withLock { tool.handler(args, store) }
+        return try {
+            mutex.withLock { tool.handler(args, store) }
+        } catch (error: IllegalArgumentException) {
+            // Parameter failures answer -32602 (server contract), not isError
+            // envelopes — same mapping as the v1/v2/v3 registries.
+            throw McpToolException(error.message ?: "invalid parameters for tool '$name'")
+        }
     }
 
     /** True when [name] is one of this registry's tools. */
@@ -135,6 +141,11 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
 
     private fun historyFor(sessionId: String): com.pixellab.core.history.CommandHistory =
         histories.getOrPut(sessionId) { com.pixellab.core.history.CommandHistory() }
+
+    /** Drops the tier-local command history of [sessionId]. */
+    fun clearSessionState(sessionId: String) {
+        histories.remove(sessionId)
+    }
 
     private fun requireActiveCel(project: SpriteProject): PixelFrame {
         return project.activeCel()

@@ -30,13 +30,28 @@ object DrawOps {
      */
     private const val MAX_ELLIPSE_EXTENT = 32768
 
+    /**
+     * Upper bound for a line's coordinate span. Bresenham walks one step per
+     * unit of span; without this cap a line from -2e9 to +2e9 would iterate
+     * ~4 billion times (and `abs(x1 - x0)` on Ints wraps to a bogus negative
+     * span first). 262144 steps covers every sane pixel-art canvas diagonal
+     * while keeping the walk constant-bounded.
+     */
+    private const val MAX_LINE_SPAN = 262_144
+
     /** Bresenham integer line from (`x0`, `y0`) to (`x1`, `y1`), all octants. */
     fun line(x0: Int, y0: Int, x1: Int, y1: Int): List<PixelPoint> {
+        // Long-domain: `abs(x1 - x0)` on Ints wraps for endpoints ~2e9 apart.
+        val spanX = abs(x1.toLong() - x0.toLong())
+        val spanY = abs(y1.toLong() - y0.toLong())
+        require(spanX <= MAX_LINE_SPAN && spanY <= MAX_LINE_SPAN) {
+            "line span (${x0},$y0)→(${x1},$y1) exceeds the $MAX_LINE_SPAN step limit"
+        }
         val out = ArrayList<PixelPoint>()
         var x = x0
         var y = y0
-        val dx = abs(x1 - x0)
-        val dy = -abs(y1 - y0)
+        val dx = spanX
+        val dy = -spanY
         val stepX = if (x0 < x1) 1 else -1
         val stepY = if (y0 < y1) 1 else -1
         var err = dx + dy

@@ -130,6 +130,15 @@ jobs:
             $(find pixel-core/src/main/kotlin -name '*.kt' | sort) \
             $(find /tmp/pl-stubs -name '*.kt' | sort)
 
+      - name: Compile pixel-mcp main sources
+        run: |
+          # The MCP wire layer is pure JVM (coroutines only) — compile it
+          # against the freshly built pixel-core classes so router/transport
+          # regressions surface in the fast gate, not only in Gradle.
+          CP="/tmp/out-main:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar"
+          "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-mcp \
+            $(find pixel-mcp/src/main/kotlin -name '*.kt' | sort)
+
       - name: Compile pixel-core test sources
         run: |
           CP="/tmp/out-main:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar"

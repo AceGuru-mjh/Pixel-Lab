@@ -431,6 +431,11 @@ object Json {
                             'u' -> {
                                 if (pos + 4 >= text.length) throw JsonParseException("truncated \\u escape")
                                 val hex = text.substring(pos + 1, pos + 5)
+                                // `toIntOrNull(16)` also accepts '+'/'-' signs via
+                                // Integer.parseInt; RFC 8259 demands 4 hex digits.
+                                if (!hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                                    throw JsonParseException("invalid \\u escape '$hex'")
+                                }
                                 val code = hex.toIntOrNull(16)
                                     ?: throw JsonParseException("invalid \\u escape '$hex'")
                                 out.append(code.toChar())

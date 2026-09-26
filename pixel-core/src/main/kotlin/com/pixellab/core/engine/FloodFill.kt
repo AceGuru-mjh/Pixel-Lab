@@ -46,7 +46,8 @@ object FloodFill {
     ): IntArray {
         require(frameWidth > 0) { "frameWidth must be positive (was $frameWidth)" }
         require(frameHeight > 0) { "frameHeight must be positive (was $frameHeight)" }
-        require(pixels.size == frameWidth * frameHeight) {
+        // Long-domain guard: Int multiplication wraps on huge dims.
+        require(pixels.size.toLong() == frameWidth.toLong() * frameHeight.toLong()) {
             "pixels size ${pixels.size} does not match ${frameWidth}x${frameHeight}"
         }
         require(tolerance >= 0) { "tolerance must be >= 0 (was $tolerance)" }

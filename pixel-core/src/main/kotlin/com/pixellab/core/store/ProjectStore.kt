@@ -333,10 +333,37 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
     // Internals
     // ------------------------------------------------------------------
 
-    /** Atomic write: staging file + rename (see the class KDoc). */
+    /** Atomic write: staging file + atomic move (see the class KDoc).
+     *
+     *  The promotion uses `Files.move(..., ATOMIC_MOVE, REPLACE_EXISTING)`
+     *  where the platform supports it — POSIX `rename` replaces the target
+     *  in one indivisible step. The previous delete-then-rename sequence
+     *  widened a crash window: after `delete` and before `rename` a crash
+     *  left the directory with NO document at all (only a .tmp), directly
+     *  contradicting the atomicity contract. The File.renameTo fallback
+     *  still exists for platforms without java.nio semantics. */
     private fun writeAtomic(target: File, bytes: ByteArray) {
         val staging = File(target.path + ".tmp")
         staging.writeBytes(bytes)
+        try {
+            java.nio.file.Files.move(
+                staging.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+            return
+        } catch (atomicUnsupported: java.nio.file.AtomicMoveNotSupportedException) {
+            // Fall through to the legacy path below.
+        } catch (moveFailed: IOException) {
+            // Non-atomic move also failed (e.g. cross-FS staging): try the
+            // legacy rename before giving up.
+        }
+        if (!staging.exists()) {
+            // The move partially succeeded on some providers; treat as done.
+            if (target.exists()) return
+            throw IOException("cannot promote ${staging.absolutePath} to ${target.absolutePath}")
+        }
         if (target.exists() && !target.delete()) {
             staging.delete()
             throw IOException("cannot replace ${target.absolutePath}")
@@ -407,9 +434,24 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
             while (j < text.length && text[j].isWhitespace()) j += 1
             when {
                 j < text.length && text[j] == '"' -> {
-                    val valueEnd = text.indexOf('"', j + 1)
+                    // The writer escapes quotes/backslashes (jsonString);
+                    // a bare indexOf('"') would cut values like `we\"ird`
+                    // short and desynchronize the rest of the scan. Walk
+                    // escapes while locating the closing quote.
+                    var valueEnd = -1
+                    var k = j + 1
+                    while (k < text.length) {
+                        when (text[k]) {
+                            '\\' -> k += 2
+                            '"' -> {
+                                valueEnd = k
+                                break
+                            }
+                            else -> k += 1
+                        }
+                    }
                     if (valueEnd < 0) break
-                    out[key] = text.substring(j + 1, valueEnd)
+                    out[key] = unescapeJsonString(text.substring(j + 1, valueEnd))
                     i = valueEnd + 1
                 }
 
@@ -431,6 +473,44 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
             }
         }
         return out
+    }
+
+    /** Undoes the [jsonString] escape set (meta sidecar read path). */
+    private fun unescapeJsonString(value: String): String {
+        if (!value.contains('\\')) return value
+        val out = StringBuilder(value.length)
+        var i = 0
+        while (i < value.length) {
+            val c = value[i]
+            if (c != '\\') {
+                out.append(c)
+                i += 1
+                continue
+            }
+            i += 1
+            if (i >= value.length) break
+            when (val e = value[i]) {
+                '"' -> out.append('"')
+                '\\' -> out.append('\\')
+                '/' -> out.append('/')
+                'n' -> out.append('\n')
+                'r' -> out.append('\r')
+                't' -> out.append('\t')
+                'u' -> {
+                    val hex = if (i + 4 < value.length) value.substring(i + 1, i + 5) else ""
+                    val code = hex.toIntOrNull(16)
+                    if (code != null) {
+                        out.append(code.toChar())
+                        i += 4
+                    } else {
+                        out.append(e)
+                    }
+                }
+                else -> out.append(e)
+            }
+            i += 1
+        }
+        return out.toString()
     }
 
     /** JSON string literal with the minimal escape set. */

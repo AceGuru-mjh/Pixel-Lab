@@ -75,7 +75,14 @@ class PixelSessionStore(
             lastUsedMs = System.currentTimeMillis(),
         )
         synchronized(evictionLock) {
-            sessions[id] = session
+            // Registering under an id that already exists replaces that
+            // session — the displaced project leaves the store's ownership
+            // and must fire the discard callbacks, or its engine undo
+            // history leaks forever (histories key by project id).
+            val displaced = sessions.put(id, session)
+            if (displaced != null) {
+                onProjectDiscarded?.invoke(displaced.project.id)
+            }
             evictOverCap()
         }
         return session
@@ -96,31 +103,33 @@ class PixelSessionStore(
     }
 
     /** Stores [project] back into the session and refreshes its LRU stamp. */
-    fun update(id: String, project: SpriteProject): SessionState? {
+    fun update(id: String, project: SpriteProject): SessionState? = synchronized(evictionLock) {
         val session = sessions[id] ?: return null
-        synchronized(evictionLock) {
-            val previous = session.project
-            if (previous.id != project.id) {
-                // The session swapped to a different project lineage (template
-                // apply, project load): the old project's history is orphaned.
-                onProjectDiscarded?.invoke(previous.id)
-            }
-            session.project = project
-            session.touch()
+        val previous = session.project
+        if (previous.id != project.id) {
+            // The session swapped to a different project lineage (template
+            // apply, project load): the old project's history is orphaned.
+            onProjectDiscarded?.invoke(previous.id)
         }
-        return session
+        session.project = project
+        session.touch()
+        session
     }
 
-    /** Drops the session with [id]; true when it existed. */
-    fun remove(id: String): Boolean {
+    /** Drops the session with [id]; true when it existed. Runs under the
+     *  same lock as eviction so a concurrent evictOverCap cannot select this
+     *  session and double-fire the discard callbacks. */
+    fun remove(id: String): Boolean = synchronized(evictionLock) {
         val session = sessions.remove(id) ?: return false
         onProjectDiscarded?.invoke(session.project.id)
         onSessionDiscarded?.invoke(session.id)
-        return true
+        true
     }
 
-    /** Drops every session. */
-    fun clear() {
+    /** Drops every session. Locked against concurrent newSession so a
+     *  clear() cannot race a registration into a zombie session that
+     *  survives the clear (and its stop()-determinism guarantee). */
+    fun clear() = synchronized(evictionLock) {
         for (session in sessions.values) {
             onProjectDiscarded?.invoke(session.project.id)
             onSessionDiscarded?.invoke(session.id)
@@ -146,13 +155,17 @@ class PixelSessionStore(
             }
         }
 
-    /** Removes least-recently-used sessions until the cap is satisfied again. */
+    /** Removes least-recently-used sessions until the cap is satisfied
+     *  again. Callers hold [evictionLock]; callbacks fire only for entries
+     *  this loop actually removed (a concurrent remove() may have taken the
+     *  same entry first — double-firing would violate the single-shot
+     *  discard contract). */
     private fun evictOverCap() {
         while (sessions.size > maxSessions) {
             val oldest = sessions.values.minByOrNull { it.lastUsedMs } ?: break
-            sessions.remove(oldest.id)
-            onProjectDiscarded?.invoke(oldest.project.id)
-            onSessionDiscarded?.invoke(oldest.id)
+            val removed = sessions.remove(oldest.id) ?: continue
+            onProjectDiscarded?.invoke(removed.project.id)
+            onSessionDiscarded?.invoke(removed.id)
         }
     }
 

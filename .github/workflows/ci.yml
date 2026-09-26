@@ -139,6 +139,21 @@ jobs:
           "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-mcp \
             $(find pixel-mcp/src/main/kotlin -name '*.kt' | sort)
 
+      - name: Compile pixel-mcp test sources
+        run: |
+          # Audit-round addition: the MCP layer now carries its own test
+          # suite (session-store semantics, transport hardening over real
+          # loopback sockets). Compile it against core+mcp classes so the
+          # jvm-test gate below can run it.
+          if [ -d pixel-mcp/src/test/kotlin ] && find pixel-mcp/src/test/kotlin -name '*.kt' | grep -q .; then
+            CP="/tmp/out-main:/tmp/out-mcp:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar"
+            "$HOME/pl-kotlinc/bin/kotlinc" -cp "$CP" -jvm-target 17 -d /tmp/out-mcp-test \
+              $(find pixel-mcp/src/test/kotlin -name '*.kt' | sort)
+          else
+            echo "No pixel-mcp test sources present; skipping."
+            mkdir -p /tmp/out-mcp-test/.empty
+          fi
+
       - name: Compile pixel-core test sources
         run: |
           CP="/tmp/out-main:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar"
@@ -154,6 +169,16 @@ jobs:
         with:
           name: jvm-classes
           path: /tmp/out-main
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload pixel-mcp classes and tests (for the test job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-mcp-classes
+          path: |
+            /tmp/out-mcp
+            /tmp/out-mcp-test
           retention-days: 1
           if-no-files-found: error
 
@@ -176,6 +201,12 @@ jobs:
         with:
           name: jvm-classes
           path: /tmp/out-main
+
+      - name: Download pixel-mcp classes and tests
+        uses: actions/download-artifact@v4
+        with:
+          name: jvm-mcp-classes
+          path: /tmp
 
       - name: Cache kotlinc and runner jars
         uses: actions/cache@v4
@@ -218,8 +249,8 @@ jobs:
 
       - name: Run tests (JUnit Platform console)
         run: |
-          CP="/tmp/out-main:/tmp/out-test:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar:/tmp/pl-libs/hamcrest-core-1.3.jar:/tmp/pl-libs/kotlin-stdlib-2.0.21.jar"
-          CLASSES=$(find /tmp/out-test -name '*Kt.class' -o -name '*Test.class' | wc -l)
+          CP="/tmp/out-main:/tmp/out-test:/tmp/out-mcp:/tmp/out-mcp-test:/tmp/pl-libs/kotlinx-coroutines-core-jvm-1.9.0.jar:/tmp/pl-libs/kotlin-test-2.0.21.jar:/tmp/pl-libs/junit-4.13.2.jar:/tmp/pl-libs/hamcrest-core-1.3.jar:/tmp/pl-libs/kotlin-stdlib-2.0.21.jar"
+          CLASSES=$(find /tmp/out-test /tmp/out-mcp-test -name '*Kt.class' -o -name '*Test.class' | wc -l)
           if [ "$CLASSES" -gt 0 ]; then
             java -jar /tmp/pl-libs/junit-platform-console-standalone-1.10.3.jar \
               --class-path "$CP" \
@@ -251,8 +282,8 @@ jobs:
       - name: Assemble every module (native arm64-v8a + x86_64)
         run: ./gradlew assembleDebug --stacktrace --no-daemon
 
-      - name: Run pixel-core unit tests
-        run: ./gradlew :pixel-core:testDebugUnitTest --stacktrace --no-daemon
+      - name: Run pixel-core and pixel-mcp unit tests
+        run: ./gradlew :pixel-core:testDebugUnitTest :pixel-mcp:testDebugUnitTest --stacktrace --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

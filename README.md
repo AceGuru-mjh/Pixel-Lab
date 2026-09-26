@@ -92,7 +92,8 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #48 | **Agent 视觉（V5）**：describe 包 7 组件（ASCII 渲染/区域读取/色彩普查/结构/对称/帧差/自然语言描述）+ 11 个只读工具（总 **162**）+ canvas_create session_id 契约修复 + 引擎 peekBefore + 18 项单测 | +2,950 行 |
 | PR #49 | **Agent 工效学（V6）**：draw_batch 验证先行批量绘制（64 op 单往返）+ 命名检查点（CheckpointTracker 深度锚/整批回滚）+ 会话持久化（SlotStore 命名槽 + ProjectStore）+ canvas_checksum FNV 指纹 + project_export_json 反向通道（总 **174** 工具）+ 45 项单测 | +2,900 行 |
 | PR #50 | **技能与宿主集成包**：3 个可导入 Android-Guru-Agent 的方法论技能（精灵设计/调色板教练/动画工作流）+ host-integration/ 30 秒接入物料（mcp-servers 配置片段）+ 样例 App MCP 服务器面板（固定端口 8901/8902 + 持久化接线 + 画廊入口） | +640 行 |
-| **合计** | | **56,170+ 行**（Kotlin 54,028+ + C++ 2,142+），**174 个 MCP 工具** |
+| PR #51 | **审计加固轮**：传输/存储 12 项缺陷修复（chunked Int 溢出 DoS、WS 握手 RFC 严格化 + 连接上限 + close 码校验、SSE 注册 TOCTOU、会话存储并发语义、start 部分失败回滚、原子写窗口、meta 转义）+ draw_batch 契约修正 + CI 扩至 pixel-mcp 测试门 + 17 项回归测试（总 313） | +1,160 行 |
+| **合计** | | **57,330+ 行**（Kotlin 55,188+ + C++ 2,142+），**174 个 MCP 工具**，**313 项单测** |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

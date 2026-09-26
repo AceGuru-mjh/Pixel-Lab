@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -151,7 +152,16 @@ class HttpSseServer(
             } catch (error: IOException) {
                 break // listening socket closed by stop()
             }
-            scope?.launch { handleConnection(client) }
+            // Between stop() cancelling the scope and the accept throwing,
+            // one more connection can slip through: a null/cancelled scope
+            // makes this launch a no-op and the accepted socket would never
+            // be closed (leaked FD). Guard both sides.
+            val active = scope?.takeIf { it.isActive }
+            if (active == null) {
+                closeQuietly(client)
+                continue
+            }
+            active.launch { handleConnection(client) }
         }
     }
 
@@ -262,13 +272,22 @@ class HttpSseServer(
 
     /** GET /sse: emit the stream head, register the client, hold until disconnect. */
     private suspend fun handleSse(socket: Socket, input: InputStream) {
-        if (clients.size >= MAX_SSE_CLIENTS) {
+        // Registration and cap check happen under one lock: a check-then-add
+        // gap would let a burst of concurrent GETs register past the cap.
+        val registered = synchronized(LOCK) {
+            if (clients.size >= MAX_SSE_CLIENTS) {
+                null
+            } else {
+                SseClient(socket, BufferedOutputStream(socket.getOutputStream())).also { clients.add(it) }
+            }
+        }
+        if (registered == null) {
             writeStatus(socket, 503, "{\"error\":\"too_many_sse_clients\"}")
             closeQuietly(socket)
             return
         }
         socket.soTimeout = 0
-        val out = BufferedOutputStream(socket.getOutputStream())
+        val out = registered.out
         try {
             out.write(
                 (
@@ -280,11 +299,11 @@ class HttpSseServer(
             )
             out.flush()
         } catch (error: IOException) {
+            dropClient(registered)
             closeQuietly(socket)
             return
         }
-        val client = SseClient(socket, out)
-        clients.add(client)
+        val client = registered
         pushToOne(client, "endpoint", "/messages")
         // Hold the stream open until the client disconnects; discards any bytes.
         val heartbeat = scope?.launch {
@@ -423,7 +442,12 @@ class HttpSseServer(
         while (true) {
             val sizeLine = readLine(input) ?: return null
             val size = sizeLine.substringBefore(';').trim().toIntOrNull(16) ?: return null
-            if (size < 0 || out.size() + size > MAX_BODY_BYTES) return null
+            // Long-domain guard: an Int + Int sum overflows negative for
+            // chunk headers like `7FFFFFFF` after a first small chunk, which
+            // would slip past an Int comparison and attempt a ~2 GB
+            // allocation in readBodyBytes below (OutOfMemoryError escapes the
+            // Exception-based connection guard — a one-request DoS).
+            if (size < 0 || out.size().toLong() + size.toLong() > MAX_BODY_BYTES) return null
             if (size == 0) {
                 // Trailer section: consume lines until the blank terminator.
                 while (true) {

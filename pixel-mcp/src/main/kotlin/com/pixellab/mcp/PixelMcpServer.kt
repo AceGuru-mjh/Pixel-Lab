@@ -105,7 +105,17 @@ class PixelMcpServer(
             handle?.let { throw IllegalStateException("PixelMcpServer is already running on port ${it.port}") }
             transport.start(port)
             val boundPort = transport.port ?: port
-            val boundWsPort = websocketPort?.let { bootWebSocket(it) }
+            val boundWsPort = try {
+                websocketPort?.let { bootWebSocket(it) }
+            } catch (error: Exception) {
+                // Partial-failure rollback: with the HTTP transport up and
+                // the WS bind failing, leaving handle null would make
+                // stop() a no-op and leak the HTTP listener + accept scope
+                // until process death (and every retry would answer
+                // "already running"). Tear the HTTP side down first.
+                transport.stop()
+                throw error
+            }
             val started = PixelMcpHandle(boundPort, boundWsPort, System.currentTimeMillis())
             handle = started
             config.effectiveLogger.i(
@@ -182,12 +192,19 @@ class PixelMcpServer(
         }
         val version = (request.raw("jsonrpc") as? JsonString)?.value
         val id = request.raw("id")
+        // Id shape is validated BEFORE the version check so an error reply
+        // never echoes a non-scalar id back onto the wire (JSON-RPC 2.0
+        // response ids may only be string/number/null).
+        val safeId: JsonElement? = when (id) {
+            null, is JsonString, is JsonNumber, is JsonNull -> id
+            else -> null
+        }
         if (version != "2.0") {
-            respond(JsonRpc.buildError(id, JsonRpc.INVALID_REQUEST, "jsonrpc must be \"2.0\""))
+            respond(JsonRpc.buildError(safeId, JsonRpc.INVALID_REQUEST, "jsonrpc must be \"2.0\""))
             return
         }
-        if (id != null && id !is JsonString && id !is JsonNumber && id !is JsonNull) {
-            respond(JsonRpc.buildError(id, JsonRpc.INVALID_REQUEST, "id must be a string, number or null"))
+        if (id != null && safeId == null) {
+            respond(JsonRpc.buildError(null, JsonRpc.INVALID_REQUEST, "id must be a string, number or null"))
             return
         }
         val method = try {

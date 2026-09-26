@@ -6,22 +6,26 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Tier-chain composite over the four MCP tool registries.
+ * Tier-chain composite over the six MCP tool registries.
  *
  * The registries were built incrementally: [McpToolRegistry] (v1, canvas /
  * draw / layer / frame / palette / animation / export tools),
  * [McpToolRegistryV2] (styled text, convert pipeline, brushes, symmetry),
- * [McpToolRegistryV3] (tilemaps, atlases, history, worldgen) and
- * [McpToolRegistryV4] (analysis, transforms, color science, vector export).
+ * [McpToolRegistryV3] (tilemaps, atlases, history, worldgen),
+ * [McpToolRegistryV4] (analysis, transforms, color science, vector export),
+ * [McpToolRegistryV5] (agent vision: read/describe/interpret) and
+ * [McpToolRegistryV6] (agent ergonomics: batch draws, checkpoints, session
+ * persistence, verification).
  * Historically only v1 was reachable through [PixelMcpServer] — the newer
  * tiers compiled but were never dispatched, which silently hid 96 tools
  * from every MCP client. This router closes that gap.
  *
- * Dispatch order is v1 → v2 → v3 → v4: each registry answers unknown names
- * with [McpToolException] carrying [JsonRpc.METHOD_NOT_FOUND], which the
- * router treats as "not in this tier, keep walking". Any other failure —
- * parameter errors (`-32602`), tool crashes — is re-thrown immediately so
- * the tier that owns the name reports the real error, never a fallback's.
+ * Dispatch order is v1 → v2 → v3 → v4 → v5 → v6: each registry answers
+ * unknown names with [McpToolException] carrying [JsonRpc.METHOD_NOT_FOUND],
+ * which the router treats as "not in this tier, keep walking". Any other
+ * failure — parameter errors (`-32602`), tool crashes — is re-thrown
+ * immediately so the tier that owns the name reports the real error, never
+ * a fallback's.
  *
  * Construction is eager and validates:
  *  * every tier's tool list is materialized once (no lazy races),
@@ -36,7 +40,7 @@ import kotlinx.coroutines.sync.withLock
  * one; the v2 object hosts its own lab by design (see its KDoc) and is
  * therefore the single deliberate exception.
  */
-class McpToolRouter(lab: PixelLab) {
+class McpToolRouter(lab: PixelLab, persistence: McpPersistence? = null) {
 
     /** One registry tier bound into the chain. */
     private class Tier(
@@ -47,12 +51,13 @@ class McpToolRouter(lab: PixelLab) {
         val execute: suspend (String, JsonObject, PixelSessionStore) -> JsonObject,
     )
 
-    /** Ordered chain: tier 1 first, tier 5 last. */
+    /** Ordered chain: tier 1 first, tier 6 last. */
     private val tiers: List<Tier>
 
     /** Direct references for session-state cleanup dispatch. */
     private val v3: McpToolRegistryV3
     private val v4: McpToolRegistryV4
+    private val v6: McpToolRegistryV6
 
     /** All tools in tier order (the order `tools/list` reports). */
     val tools: List<McpTool>
@@ -69,14 +74,17 @@ class McpToolRouter(lab: PixelLab) {
         val tier3 = McpToolRegistryV3(lab)
         val tier4 = McpToolRegistryV4(lab)
         val tier5 = McpToolRegistryV5(lab)
+        val tier6 = McpToolRegistryV6(lab, persistence)
         v3 = tier3
         v4 = tier4
+        v6 = tier6
         tiers = listOf(
             Tier(1, v1.tools.map { it.name }.toSet(), v1.tools, { v1.inputSchema(it) }, { n, p, s -> v1.execute(n, p, s) }),
             Tier(2, v2.tools().map { it.name }.toSet(), v2.tools(), { v2.inputSchema(it) }, { n, p, s -> v2.execute(n, p, s) }),
             Tier(3, tier3.tools().map { it.name }.toSet(), tier3.tools(), { tier3.inputSchema(it) }, { n, p, s -> tier3.execute(n, p, s) }),
             Tier(4, tier4.tools.map { it.name }.toSet(), tier4.tools, { tier4.schemas[it] ?: emptySchema() }, { n, p, s -> tier4.execute(n, p, s) }),
             Tier(5, tier5.tools.map { it.name }.toSet(), tier5.tools, { tier5.schemas[it] ?: emptySchema() }, { n, p, s -> tier5.execute(n, p, s) }),
+            Tier(6, tier6.tools.map { it.name }.toSet(), tier6.tools, { tier6.schemas[it] ?: emptySchema() }, { n, p, s -> tier6.execute(n, p, s) }),
         )
         val ordered = ArrayList<McpTool>()
         val byName = LinkedHashMap<String, Int>()
@@ -99,7 +107,7 @@ class McpToolRouter(lab: PixelLab) {
     /** Total number of dispatchable tools across all tiers. */
     fun toolCount(): Int = tools.size
 
-    /** The registry tier (1..5) that owns [name], or null when unknown. */
+    /** The registry tier (1..6) that owns [name], or null when unknown. */
     fun tierOf(name: String): Int? = tiers.firstOrNull { name in it.names }?.number
 
     /** JSON schema of [name]; an empty object schema for unknown names. */
@@ -117,12 +125,14 @@ class McpToolRouter(lab: PixelLab) {
         return mutex.withLock { tier.execute(name, params, store) }
     }
 
-    /** Drops tier-local per-session state (v3/v4 command histories and tile
-     * maps) for [sessionId] — called by the host when the session leaves the
-     * store, so evicted conversations do not leak project snapshots. */
+    /** Drops tier-local per-session state (v3/v4 command histories and
+     * tile maps, v6 checkpoints) for [sessionId] — called by the host when
+     * the session leaves the store, so evicted conversations do not leak
+     * project snapshots or checkpoint markers. */
     fun clearSessionState(sessionId: String) {
         v3.clearSessionState(sessionId)
         v4.clearSessionState(sessionId)
+        v6.clearSessionState(sessionId)
     }
 
     /** Empty object schema reported for unregistered names. */

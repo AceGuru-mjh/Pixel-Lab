@@ -58,9 +58,16 @@ import kotlinx.coroutines.runBlocking
  * at all, mirroring the `202` semantics of the HTTP side.
  *
  * Sessions live in an in-memory [PixelSessionStore]; calling [stop] drops
- * them, which makes restarts deterministic.
+ * them, which makes restarts deterministic. Durable work goes through the
+ * v6 `session_save`/`session_load` tools, available when the server is
+ * constructed with a non-null `persistenceRoot` (the directory backing
+ * [com.pixellab.core.store.ProjectStore] and
+ * [com.pixellab.core.store.SlotStore]).
  */
-class PixelMcpServer(private val config: PixelLabConfig = PixelLabConfig.default()) {
+class PixelMcpServer(
+    private val config: PixelLabConfig = PixelLabConfig.default(),
+    persistenceRoot: java.io.File? = null,
+) {
 
     /** Tool identity exposed by [listTools]: name, description, category, tier. */
     data class McpToolInfo(val name: String, val description: String, val category: String, val tier: Int)
@@ -69,7 +76,13 @@ class PixelMcpServer(private val config: PixelLabConfig = PixelLabConfig.default
     data class PixelMcpHandle(val port: Int, val websocketPort: Int?, val startedAtMs: Long)
 
     private val lab: PixelLab = PixelLab.create(config)
-    private val router: McpToolRouter = McpToolRouter(lab)
+    private val persistence: McpPersistence? = persistenceRoot?.let { root ->
+        McpPersistence(
+            projects = com.pixellab.core.store.ProjectStore(root),
+            slots = com.pixellab.core.store.SlotStore(root),
+        )
+    }
+    private val router: McpToolRouter = McpToolRouter(lab, persistence)
     private val store: PixelSessionStore = PixelSessionStore(
         onProjectDiscarded = { projectId -> lab.engine.clearHistory(projectId) },
         onSessionDiscarded = { sessionId -> router.clearSessionState(sessionId) },

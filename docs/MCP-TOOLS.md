@@ -126,3 +126,25 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 `frame_contours`(session_id, color, tolerance, simplify) → 走廊格轮廓环（洞标记 + path 字符串） · `export_svg`(session_id, mode[runs/outline], title) → 静态 SVG（每色一 path，b64 返回） · `export_svg_animated`(session_id, frame_duration_ms, loop, title) → SMIL 动画 SVG（每帧一个 g + 离散 opacity 驱动）
 
 **累计：151 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32）。
+
+## V5（11 个）— Agent 视觉（第 5 轮：让 Agent 看见画布）
+
+修复"盲画"问题：此前 151 个工具全是写操作，Agent 画完无法核对。V5 全部只读 —— 不产生撤销记录、不改动会话。
+
+### v5-read（4）
+
+`canvas_read`(session_id, x, y, width, height, format[hex/palette_index/rle/sketch], palette_id, frame_index) → 区域读回：hex 色格 / 调色板索引格 / 行程编码 / 草图（图例+字符格，可改后经 sketch_draw 画回） · `canvas_ascii`(session_id, style[letters/shades/blocks], max_width 4..256, ascii_only, invert_shades, palette_id) → ASCII 艺术渲染 + 图例（letters 按频次 A,B,C… 一色一字；shades 亮度梯 " .:-=+*#%@"；blocks 半块压缩两行一行） · `pixel_probe`(session_id, x, y, radius 1..4) → 单像素 + 3x3(可扩) 邻域格 + CSS 命名 · `canvas_legend`(session_id, palette_id) → 整幅画布草图化（图例行 `C=#hex` + 字符格）供编辑回画
+
+### v5-describe（4）
+
+`canvas_describe`(session_id, sections[colors,structure,symmetry,fingerprint], max_colors, max_blobs, palette_id) → 自然语言描述（尺寸/占用/主色/区域结构/对称/布局指纹 + 调色板覆盖审计） · `canvas_stats`(session_id) → 数字摘要（占用比/可见/透明/半透明/独立色数/内容框/孤点数） · `canvas_colors`(session_id, max_colors, palette_id) → 色彩普查（每色 count+hex+CSS 名+族系；带 palette_id 时附覆盖：已用条目/离板色） · `canvas_frames_summary`(session_id) → 逐帧动画概览（占用/主色/内容框）
+
+### v5-interpret（3）
+
+`canvas_structure`(session_id, connectivity[four/eight], max_blobs) → 连通区域解读（面积/外接框/主色/洞/贴边/填充比/形状判词"实心块/环形/细轮廓"）+ 宏观占用指纹格 · `canvas_symmetry`(session_id, tolerance 0..255) → 水平/垂直/180°/对角对称探针（逐轴 holds + 失配对数） · `canvas_diff`(session_id, mode[last_op/frames/sessions], frame_a, frame_b, other_session_id) → 差异报告（+增/-删/~改色像素数、各类包围框、色变迁移表、一句总结；last_op 对比最近一次操作前快照，引擎 peekBefore 非变异读取）
+
+**累计：162 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32 + v5 11）。
+
+### 本轮契约修复（Agent 可理解性）
+
+`canvas_create` / `project_new` 新增可选 `session_id` 参数：LLM 天然会传会话 id 固定新画布；此前该参数被静默忽略、画布落在服务端随机 id 上，后续 draw 又按 auto-create 语义另建 16x16 默认会话，导致尺寸参数看似失效。现在：指定 id 直接命名会话；id 已占用时报 `-32602`（提示换 id 或 canvas_info 查看）。

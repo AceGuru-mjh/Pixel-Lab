@@ -148,3 +148,29 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 ### 本轮契约修复（Agent 可理解性）
 
 `canvas_create` / `project_new` 新增可选 `session_id` 参数：LLM 天然会传会话 id 固定新画布；此前该参数被静默忽略、画布落在服务端随机 id 上，后续 draw 又按 auto-create 语义另建 16x16 默认会话，导致尺寸参数看似失效。现在：指定 id 直接命名会话；id 已占用时报 `-32602`（提示换 id 或 canvas_info 查看）。
+
+## V6（12 个）— Agent 工效学（第 6 轮：批量/检查点/持久化/校验）
+
+解决长会话四大痛点：**网络延迟**（一图元一往返）、**易碎性**（中途参数错留下半成品）、**不持久**（进程死即丢会话）、**不可验证**（改没改要全量读画布）。
+
+### v6-batch（1）
+
+`draw_batch`(session_id, ops[64 上限], dry_run, frame_index) → **一次调用多个图元**。ops 为对象数组，每项 `{op: 'pixel'|'line'|'rect'|'circle'|'stroke'|'fill'|'replace'|'erase', ...参数}`（参数与同名 draw_* 工具一致）。**验证先行**：所有 op 先于任何引擎调用校验（几何/笔宽/填充种子/图层锁），坏 op 报 `op[i] (kind): 原因`，绝无半执行批次。返回逐 op applied/noop、聚合变更摘要（+增/-删/~改像素 + 各类包围框）、前后指纹、新增历史条数。`dry_run=true` 只校验不落笔。每个 applied op 一条撤销记录（label `batch:<kind>`），配合 checkpoint 整批回滚。
+
+### v6-verify（1）
+
+`canvas_checksum`(session_id, frame_index) → FNV-1a 64 十六进制指纹 + 可见像素数。alpha 零色 RGB 通道规范化（透明即等价），尺寸混入摘要防前缀碰撞。改一字节即变——比 canvas_read 便宜得多的"落笔了吗"。
+
+### v6-checkpoint（4）
+
+`checkpoint_set`(session_id, name) → 命名撤销深度锚（32 个/会话 FIFO，同名覆盖）· `checkpoint_list`(session_id) → 检查点清单（深度/时间/上层 label）· `checkpoint_rollback`(session_id, name) → **一次调用回滚到锚点**（幂等；项目血脉切换则拒绝并说明）· `checkpoint_delete`(session_id, name)。典型流：set → 险改 → canvas_diff 核对 → 不满意即 rollback。
+
+### v6-persist（4）
+
+`session_save`(session_id, name) → 存档为命名槽（字母/数字/._- 64 上限；SlotStore 槽文档 + ProjectStore 像素，原子写）· `session_load`(name, session_id?) → 载入槽（无 session_id 新建会话）· `session_saved_list` → 存档清单（最新优先 + 指针完好性 + 项目在盘性）· `session_saved_delete`(name)。需服务端以 `persistenceRoot` 启动（`PixelMcpServer(config, persistenceRoot)`）；未配置时四个工具报可操作配置错误。**服务器重启/换对话续作**：save → 重启 → load。
+
+### v6-hygiene（2）
+
+`session_rename`(session_id, name) → 项目改名（不产生撤销记录）· `project_export_json`(session_id) → 导出 v2 线格式文档（data_b64 + byte_count）——补上 io_import_project 的反向通道，跨服务器迁移/嵌入提示词。
+
+**累计：174 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32 + v5 11 + v6 12）。

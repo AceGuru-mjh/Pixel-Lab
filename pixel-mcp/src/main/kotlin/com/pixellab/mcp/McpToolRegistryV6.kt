@@ -154,17 +154,6 @@ class McpToolRegistryV6(
             ?: throw IllegalArgumentException("parameter '$key' must be a boolean")
     }
 
-    /** Composited frame for reading: `frame_index` when present (validated),
-     *  else the session's active frame. */
-    private fun readFrame(params: JsonObject, project: SpriteProject): com.pixellab.core.model.PixelFrame {
-        val index = optionalInt(params, "frame_index") ?: project.activeFrameIndex
-        if (index < 0 || index >= project.frameCount) {
-            throw IllegalArgumentException(
-                "frame_index $index outside 0..${project.frameCount - 1} (project has ${project.frameCount} frames)",
-            )
-        }
-        return project.compositeFrame(index)
-    }
 
     /** Color parameter: `"#RRGGBB"`, `"#AARRGGBB"` or an ARGB integer. */
     private fun colorParam(params: JsonObject, key: String): Int {
@@ -276,10 +265,9 @@ class McpToolRegistryV6(
 
         add(
             "draw_batch",
-            "Executes a list of drawing operations in ONE call: ops is an array of {op: 'pixel'|'line'|'rect'|'circle'|'stroke'|'fill'|'replace'|'erase', ...primitive params}. All ops are validated BEFORE any is applied, so a bad op never leaves a half-drawn batch. Returns per-op applied/noop outcomes, an aggregate change summary (added/removed/changed pixels + bounding boxes) and before/after checksums. dry_run=true validates and reports without mutating. Use this instead of many draw_* calls — one round trip, atomic validation.",
+            "Executes a list of drawing operations in ONE call: ops is an array of {op: 'pixel'|'line'|'rect'|'circle'|'stroke'|'fill'|'replace'|'erase', ...primitive params}. Ops always draw on the ACTIVE frame of the session (set the target first with frame-list tools if needed — frame_index is intentionally not a parameter here, the change summary is computed against the frame that was actually drawn). All ops are validated BEFORE any is applied, so a bad op never leaves a half-drawn batch. Returns per-op applied/noop outcomes, an aggregate change summary (added/removed/changed pixels + bounding boxes) and before/after checksums. dry_run=true validates and reports without mutating. Use this instead of many draw_* calls — one round trip, atomic validation.",
             "v6-batch",
             "session_id" to "string", "ops" to "array", "dry_run" to "boolean",
-            "frame_index" to "integer",
             required = listOf("session_id", "ops"),
         ) { params, store ->
             val session = sessionOf(params, store)
@@ -300,7 +288,11 @@ class McpToolRegistryV6(
                 ops.add(parseBatchOp(op, index))
             }
             val project = session.project
-            val beforeComposite = readFrame(params, project)
+            // The change envelope is computed against the frame the engine
+            // actually drew on — the ACTIVE frame (there is deliberately no
+            // frame_index parameter: a diff against a param-selected frame
+            // would misreport ops that always target the active cel).
+            val beforeComposite = project.compositeActiveFrame()
             val beforeFingerprint = FrameFingerprintComputer.of(beforeComposite)
 
             val outcomes: List<com.pixellab.core.batch.OpOutcome>
@@ -317,7 +309,7 @@ class McpToolRegistryV6(
                 store.update(session.id, finalProject)
             }
 
-            val afterComposite = if (dryRun) beforeComposite else readFrame(params, finalProject)
+            val afterComposite = if (dryRun) beforeComposite else finalProject.compositeActiveFrame()
             val diff = FrameDiff.diff(beforeComposite, afterComposite)
             val afterFingerprint = FrameFingerprintComputer.of(afterComposite)
 
@@ -359,11 +351,18 @@ class McpToolRegistryV6(
             required = listOf("session_id"),
         ) { params, store ->
             val session = sessionOf(params, store)
-            val frame = readFrame(params, session.project)
+            val project = session.project
+            val frameIndex = optionalInt(params, "frame_index") ?: project.activeFrameIndex
+            if (frameIndex < 0 || frameIndex >= project.frameCount) {
+                throw IllegalArgumentException(
+                    "frame_index $frameIndex outside 0..${project.frameCount - 1} (project has ${project.frameCount} frames)",
+                )
+            }
+            val frame = project.compositeFrame(frameIndex)
             val fingerprint = FrameFingerprintComputer.of(frame)
             jsonobj {
                 put("session_id", session.id)
-                put("frame_index", session.project.activeFrameIndex)
+                put("frame_index", frameIndex)
                 put("digest", fingerprint.digest)
                 put("width", fingerprint.width)
                 put("height", fingerprint.height)

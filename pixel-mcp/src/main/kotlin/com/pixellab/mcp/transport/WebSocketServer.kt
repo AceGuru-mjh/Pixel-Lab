@@ -145,6 +145,12 @@ class WebSocketServer(
         /** Read timeout for idle established connections (ms). */
         private const val IDLE_TIMEOUT_MS: Int = 0 // 0 = forever, RFC keeps WS open
 
+        /** Upper bound on concurrent connections. Each connection owns a
+         *  dedicated thread (~1 MB stack) and two FDs — unbounded accepts
+         *  would let a local process exhaust threads/FDs, so refuse with
+         *  close code 1013 (Try Again Later) beyond this many. */
+        private const val MAX_CONNECTIONS: Int = 64
+
         /** Maximum decoded close reason echoed back / logged. */
         private const val MAX_CLOSE_REASON_BYTES: Int = 123
 
@@ -231,7 +237,24 @@ class WebSocketServer(
             }
             socket.soTimeout = IDLE_TIMEOUT_MS
             connection = Connection(socket, input, output, id)
+            if (connections.size >= MAX_CONNECTIONS) {
+                // Over the connection budget: politely refuse (1013 = Try
+                // Again Later) instead of growing threads without bound.
+                sendClose(connection, 1013)
+                closeQuietly(socket)
+                logger?.invoke("conn#$id: refused, connection budget exhausted")
+                return
+            }
             connections.add(connection)
+            if (closed.get()) {
+                // close() may have snapshotted and cleared the registry
+                // between this connection's accept and its registration —
+                // nobody would ever close it again. Re-check and self-destroy
+                // so the thread and FD do not leak.
+                connections.remove(connection)
+                closeQuietly(socket)
+                return
+            }
             logger?.invoke("conn#$id: handshake accepted")
             messageLoop(connection)
             // messageLoop only returns for a close handshake — the peer
@@ -291,11 +314,17 @@ class WebSocketServer(
         val method = requestLine.split(" ").firstOrNull()?.uppercase() ?: ""
         val upgrade = headers["upgrade"]?.lowercase() ?: ""
         val key = headers["sec-websocket-key"] ?: ""
+        val version = headers["sec-websocket-version"] ?: ""
+        val connectionTokens = headers["connection"]?.lowercase()?.split(',')?.map { it.trim() } ?: emptyList()
 
-        if (method != "GET" || !upgrade.contains("websocket") || !isWebSocketKey(key)) {
+        val versionOk = version == "13"
+        val connectionOk = connectionTokens.contains("upgrade")
+        if (method != "GET" || !upgrade.contains("websocket") || !isWebSocketKey(key) || !versionOk || !connectionOk) {
             val reason = when {
                 method != "GET" -> "method_not_get"
                 !upgrade.contains("websocket") -> "missing_upgrade"
+                !versionOk -> "unsupported_websocket_version"
+                !connectionOk -> "missing_connection_upgrade"
                 else -> "missing_or_bad_sec_websocket_key"
             }
             writeHttpResponse(
@@ -303,6 +332,7 @@ class WebSocketServer(
                 "HTTP/1.1 400 Bad Request\r\n" +
                     "Content-Type: text/plain\r\n" +
                     "Content-Length: ${reason.length}\r\n" +
+                    (if (!versionOk) "Sec-WebSocket-Version: 13\r\n" else "") +
                     "Connection: close\r\n\r\n$reason",
             )
             logger?.invoke("handshake refused: $reason")
@@ -369,7 +399,15 @@ class WebSocketServer(
                 OP_CLOSE -> {
                     val (code, reason) = parseClosePayload(frame.payload)
                     logger?.invoke("conn#${connection.id}: close $code '$reason'")
-                    sendClose(connection, if (code == null) 1000 else code)
+                    // Echo the peer's code only when it is a legal close code
+                    // (RFC 6455 §7.4.1); codes like 999 or 1005/1006 must
+                    // never appear ON the wire, so answer 1002 instead.
+                    val echo = when {
+                        code == null -> 1000
+                        isLegalCloseCode(code) -> code
+                        else -> 1002
+                    }
+                    sendClose(connection, echo)
                     return
                 }
 
@@ -581,6 +619,12 @@ class WebSocketServer(
         System.arraycopy(reasonBytes, 0, payload, 2, reasonBytes.size)
         writeFrame(connection, fin = true, opcode = OP_CLOSE, payload = payload)
     }
+
+    /** Legal close codes ON the wire (RFC 6455 §7.4.1/§7.4.2): 1000-1003,
+     *  1007-1011 (1004/1005/1006 are reserved/never-sent), 3000-4999
+     *  (registered/application range). */
+    private fun isLegalCloseCode(code: Int): Boolean =
+        code in 1000..1003 || code in 1007..1011 || code in 3000..4999
 
     /** Writes one unmasked server frame under the connection write lock. */
     private fun writeFrame(connection: Connection, fin: Boolean, opcode: Int, payload: ByteArray) {

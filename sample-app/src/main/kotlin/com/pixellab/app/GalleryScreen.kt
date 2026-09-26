@@ -16,6 +16,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -77,6 +78,7 @@ fun GalleryScreen(
     projectStore: ProjectStore,
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
+    onOpenMcp: (() -> Unit)? = null,
 ) {
     var refreshToken by remember { mutableStateOf(0) }
     var pendingDelete by remember { mutableStateOf<ProjectStore.ProjectSummary?>(null) }
@@ -101,6 +103,12 @@ fun GalleryScreen(
                 color = Color.Gray,
             )
             Spacer(modifier = Modifier.weight(1f))
+            if (onOpenMcp != null) {
+                OutlinedButton(onClick = onOpenMcp) {
+                    Text(text = "MCP server")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
             Button(onClick = onNew) {
                 Text(text = "New project")
             }

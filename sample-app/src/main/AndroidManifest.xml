@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="Pixel Lab Sample"
         android:theme="@android:style/Theme.Material.NoActionBar">
@@ -14,6 +15,8 @@
         <activity
             android:name=".EditorActivity"
             android:exported="false" />
+        <activity
+            android:name=".McpServerActivity"
+            android:exported="false" />
     </application>
 </manifest>
-

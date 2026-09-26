@@ -29,6 +29,7 @@ private const val NewProjectSize: Int = 32
  */
 @Composable
 fun AppNav(store: ProjectStore) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var openProjectId by remember { mutableStateOf<String?>(null) }
     val current = openProjectId
     if (current == null) {
@@ -44,6 +45,13 @@ fun AppNav(store: ProjectStore) {
                 )
                 store.save(project)
                 openProjectId = project.id
+            },
+            onOpenMcp = {
+                // The MCP panel owns its own activity so the server's
+                // lifecycle (activity-scoped in the sample) is explicit.
+                context.startActivity(
+                    android.content.Intent(context, McpServerActivity::class.java),
+                )
             },
         )
     } else {

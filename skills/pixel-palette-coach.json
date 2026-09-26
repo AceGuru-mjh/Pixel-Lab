@@ -1,0 +1,35 @@
+{
+  "schema": "apex-skill-v1",
+  "id": "pixel-palette-coach",
+  "name": "像素调色板教练",
+  "version": "1.0.0",
+  "description": "为像素作品选择和管理调色板的决策方法论：何时用内置板、如何审计覆盖率、对比度不足怎么调、色坡(ramp)怎么构造。让 Agent 画出色彩纪律而不是随手 ARGB。",
+  "author": "Pixel Lab",
+  "license": "MIT",
+  "dependencies": [],
+  "requirements": {
+    "minAppVersion": 1,
+    "permissions": [],
+    "toolsRequired": [],
+    "privilegeLevel": "none"
+  },
+  "tools": [],
+  "configuration": {
+    "autoSetup": [],
+    "userConfig": []
+  },
+  "promptInjection": "【像素调色板教练 · 色彩纪律方法论】\n\n在 Pixel-Lab 上作画时遵循以下调色板纪律。像素艺术的色彩质量 = 少而准，不是多而杂。\n\n■ 第一步 · 选板（不要自造色起步）\n先 palette_list 看内置板，按场景选：\n- pico-8（16 色）：通用、复古游戏感、新手友好 —— 默认推荐\n- gameboy（4 色）：强烈风格约束、测试明暗结构是否成立\n- endesga-32（32 色）：色彩丰富的正式作品\n- nes54（54 色）：需要特定复古机风味时\n- clawd/kimi：暖色/蓝色系小情绪作品\n选板后 canvas_create 时传 palette_id；后续所有颜色用 palette_closest_color 换算成板内最近色（Lab 距离，比 RGB 距离更符合人眼）。\n\n■ 第二步 · 量化已有图\n用户给了参考图或画布颜色杂乱时：\n- convert_analyze → 得到建议色数与调色板\n- convert_image（color_count 按建议，dither=bayer 或 floyd_steinberg 视材质：机械/金属用 bayer 有序感，生物/织物用 floyd 自然感）\n- convert_refine 收尾去杂点（snap_alpha + remove_stray）\n\n■ 第三步 · 用色纪律（数量红线）\n- 16x16 作品：≤4 色；32x32：≤8 色；64x64：≤16 色\n- 每加一色前自问：这一色承担了新的明度档还是只是色相微差？只是微差 → 不加，用 palette_closest_color 归并\n- 构造色坡（ramp）：同一色相 3-4 档明度（暗→中→亮→高光），相邻档 ΔL 均匀；像素艺术 90% 的'高级感'来自均匀色坡\n\n■ 第四步 · 审计（画布色彩体检）\n- canvas_colors：色彩普查 + 带 palette_id 时输出覆盖率审计（已用条目 / 离板色数量）\n- 离板色 > 0 → replace_color 逐个归并回板\n- color_contrast_audit level=aa：关键前景/背景对比度必须过 AA；不过 → color_contrast_suggest 拿保色相替换建议\n- 双保险：color_simulate deficiency=deutan 看色盲可读性（红绿档靠明度差而非色相差区分）\n\n■ 第五步 · 收敛动作\n- 色数超标 → 先 replace_color 归并近似色，再 convert_refine remove_stray=true 清孤点\n- 画面发灰 → color_temperature kelvin=6500 strength=0.3 拉回中性，或手动把最暗档加深一档\n- 画面过艳 → 把最亮档往白收一点（像素画高光几乎总应该是近白）\n\n■ 反模式对照\n- 随手 #ff0000 式上色 → 一律 palette_closest_color 过板\n- 32 色画 16x16 → 数量红线，replace_color 收敛\n- 从不审计 → 每次交付前 canvas_colors + color_contrast_audit 是必检项\n- 色坡断层（中间档缺失）→ 补档，明度差用 canvas_colors 的 hex 目测 ΔL\n\n■ 工具速查\npalette_list / palette_switch / palette_closest_color / convert_analyze / convert_image / convert_refine / canvas_colors / replace_color / color_contrast_audit / color_contrast_suggest / color_simulate / color_temperature",
+  "category": "AGENT",
+  "tags": ["pixel-art", "palette", "color-theory", "pixel-lab", "methodology"],
+  "homepage": "https://github.com/AceGuru-mjh/Pixel-Lab",
+  "repository": "https://github.com/AceGuru-mjh/Pixel-Lab",
+  "trustLevel": "verified",
+  "bundled": false,
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-09-26",
+      "changes": ["初始版本：选板/量化/数量红线/审计/收敛五步法"]
+    }
+  ]
+}

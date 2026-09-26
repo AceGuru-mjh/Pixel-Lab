@@ -1,0 +1,10 @@
+{
+  "_comment": "Android-Guru-Agent MCP 配置导入片段：设置 → MCP 服务器 → 导入（或市场页添加）。导入前先在 Pixel Lab 样例 App 打开 MCP Server 面板并启动（默认端口 8901/8902）。",
+  "mcpServers": {
+    "pixel-lab": {
+      "type": "streamable_http",
+      "url": "http://127.0.0.1:8901/mcp",
+      "enabled": true
+    }
+  }
+}

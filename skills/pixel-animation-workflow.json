@@ -1,0 +1,35 @@
+{
+  "schema": "apex-skill-v1",
+  "id": "pixel-animation-workflow",
+  "name": "像素动画工作流",
+  "version": "1.0.0",
+  "description": "在 Pixel-Lab 上制作逐帧像素动画的方法论：关键帧先行、帧间核对（帧差）、缓动节奏、循环闭合检查。覆盖 idle/walk 等常见循环的制作节奏与导出选择。",
+  "author": "Pixel Lab",
+  "license": "MIT",
+  "dependencies": [],
+  "requirements": {
+    "minAppVersion": 1,
+    "permissions": [],
+    "toolsRequired": [],
+    "privilegeLevel": "none"
+  },
+  "tools": [],
+  "configuration": {
+    "autoSetup": [],
+    "userConfig": []
+  },
+  "promptInjection": "【像素动画 · 关键帧先行方法论】\n\n在 Pixel-Lab 上做逐帧动画（idle 呼吸、walk 循环、攻击等）时按此流程。核心原则：**关键帧先行、帧间核对、节奏即生命、循环必须闭合**。\n\n■ 第 0 步 · 单帧定稿\n动画前必须有一帧满意的静帧（用像素精灵设计方法论完成）。这帧是所有帧的母版。\ncheckpoint_set \"master-frame\"。\n\n■ 第 1 步 · 规划帧表（先想后画）\n按动画类型定帧数与节奏：\n- idle 呼吸：2-4 帧，帧时长 300-500ms（frame_set_duration）\n- walk 四向循环：6-8 帧起步（8 更顺滑）\n- 攻击单次：3-5 帧 + 前后缓冲帧\n- 待机眨眼：3 帧（闭/半闭/开）穿插在 idle 里\nanim_set_fps 只是默认值；逐帧节奏用 frame_set_duration(frame_index, duration_ms) 微调——**重量感来自时长不均**（预备帧短、接触帧长）。\n\n■ 第 2 步 · 关键帧制作（只做极端帧）\n- frame_clone 复制母版帧再改，**不要从空白画**（保形不跑偏）\n- 极端帧 = 动作的顶点：呼吸的完全呼/完全吸、walk 的触地/腾空\n- 每帧改动用 draw_batch 小批量做位移/形变；改完 canvas_diff mode=frames frame_a frame_b 核对帧差量是否符合预期（呼吸动画帧差应集中在躯干上下 1 像素）\n- 中间帧最后补（frame_clone 关键帧 → 小幅调整），不要先画中间帧\n\n■ 第 3 步 · 逐帧核对（防止'跑形'）\n- canvas_frames_summary 一屏看所有帧的占用/主色/内容框——内容框尺寸突然变大变小 = 跑形信号\n- 相邻帧 canvas_diff mode=frames：改动应平滑渐进；某帧改动突增 → 该帧重做\n- canvas_read 每帧同一区域抽查锚点（如角色眼睛坐标）是否平滑移动\n\n■ 第 4 步 · 循环闭合检查\n首尾帧差 canvas_diff frame_a=0 frame_b=N-1：理想循环首尾接近但不相同（如呼吸：帧0=中性，帧N-1 回到中性偏移）。首尾不闭合 → 最后一帧向首帧收敛重画。\n\n■ 第 5 步 · 节奏与特效\n- AnimationEffects 特效按需叠加：anim_breathe 幅度小起步\n- EasingCurves 语义：缓动是'帧内容的变化曲线'不是时长——用 draw_batch 的坐标插值实现（ease 曲线的帧表可让每帧位移不均匀）\n- 标签分段：anim_tag 命名段落（如 \"walk-cycle\" 0-7），导出时可选段\n\n■ 第 6 步 · 导出与交付\n- 预览给用户：export_gif（loop_count=0 无限循环）；用户要看帧率对不对先给 GIF\n- 引擎接入：export_spritesheet（layout=horizontal，8 帧 32x32 → 256x32）\n- 带动画元数据交付：export_apng 或 export_codex_pet\n- 多帧存档：session_save（槽名带帧数，如 \"knight-walk-8f\"）\n\n■ 反模式对照\n- 每帧从零画 → frame_clone 母版改\n- 画完不核对 → 帧间 canvas_diff 是成本最低的质检\n- 帧率均匀 → 用 frame_set_duration 做节奏不均\n- 循环不闭合 → 第 4 步是交付前的强制门\n\n■ 工具速查\nframe_add / frame_clone / frame_set_duration / frame_list / anim_set_fps / anim_tag / anim_breathe / anim_preview_count / canvas_diff(mode=frames) / canvas_frames_summary / canvas_read / draw_batch / checkpoint_set / checkpoint_rollback / session_save / export_gif / export_spritesheet / export_apng",
+  "category": "AGENT",
+  "tags": ["pixel-art", "animation", "sprite-sheet", "pixel-lab", "methodology"],
+  "homepage": "https://github.com/AceGuru-mjh/Pixel-Lab",
+  "repository": "https://github.com/AceGuru-mjh/Pixel-Lab",
+  "trustLevel": "verified",
+  "bundled": false,
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-09-26",
+      "changes": ["初始版本：关键帧先行六步流 + 帧差核对 + 循环闭合门"]
+    }
+  ]
+}

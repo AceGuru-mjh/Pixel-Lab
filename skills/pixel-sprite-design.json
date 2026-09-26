@@ -1,0 +1,35 @@
+{
+  "schema": "apex-skill-v1",
+  "id": "pixel-sprite-design",
+  "name": "像素精灵设计方法论",
+  "version": "1.0.0",
+  "description": "在 Pixel-Lab MCP 服务器上设计像素精灵的完整工作流：剪影优先 → 三阶段细化 → 每阶段可回滚。教会 Agent 用 draw_batch/checkpoint/canvas_read 的正确节奏作画，而不是一笔一笔盲画。",
+  "author": "Pixel Lab",
+  "license": "MIT",
+  "dependencies": [],
+  "requirements": {
+    "minAppVersion": 1,
+    "permissions": [],
+    "toolsRequired": [],
+    "privilegeLevel": "none"
+  },
+  "tools": [],
+  "configuration": {
+    "autoSetup": [],
+    "userConfig": []
+  },
+  "promptInjection": "【像素精灵设计 · 剪影优先三阶段方法论】\n\n当用户要求绘制像素精灵/角色/物品时，连接 Pixel-Lab MCP 服务器后按此方法作画。核心原则：**剪影优先、大形到小形、每阶段可回滚**。像素艺术的可读性 80% 来自剪影，不要一上来就抠细节。\n\n■ 第 0 步 · 建画布与安全网\n1. canvas_create（常用 16x16 或 32x32；小物件 16，角色 32，主视觉 64）\n2. checkpoint_set \"stage0-blank\" —— 每个阶段开始前都设检查点，画砸了一键整批回滚\n\n■ 第 1 阶段 · 剪影（silhouette pass）\n- 用 draw_batch 一次调用画完剪影，**不要逐像素调用**：\n  ops 数组里放 rect/circle/line/fill 的组合，颜色只用一个实色（如 #1a1c2c 深色）\n- 画完后必须自查：canvas_read format=sketch —— 肉眼确认剪影可读；不确定时 canvas_ascii style=letters 看形状\n- 剪影自查清单：眯眼测试（能不能认出是什么）？边缘是否有孤点？左右重心稳吗？\n- 不满意 → checkpoint_rollback 回到 stage0，剪影重画（回滚不要犹豫，这是最便宜的修正时机）\n- 满意 → checkpoint_set \"stage1-silhouette\"\n\n■ 第 2 阶段 · 分形（form pass，分色明暗）\n- 剪影内部按受光方向分 2-3 档明暗：底色 / 亮面 / 暗面\n- 仍用 draw_batch 批量画，fill 工具填大区块，draw_rect 刻结构线\n- 每次批量后用 canvas_diff mode=last_op 核对落笔范围是否符合预期\n- 颜色数刻意克制：16x16 不超过 4 色，32x32 不超过 8 色（palette_list 选一块内置板如 pico-8/endesga-32，palette_closest_color 找最近板色）\n- 满意 → checkpoint_set \"stage2-form\"\n\n■ 第 3 阶段 · 抛光（polish pass，选亮点）\n- 只加三类像素：高光（1-2 像素）、轮廓暗一档色（选择性描边，只描底边和暗面）、材质点缀\n- 亮部集中在左上（约定光源），暗部右下\n- 仍用 draw_batch；画完 canvas_checksum 对比前后指纹确认确实落了笔，再 canvas_read 局部核查\n\n■ 收尾\n- canvas_describe 做整体自评（占用/主色/结构），把描述里发现的问题当下一轮输入\n- 用户要保留 → session_save（起一个语义化名字，如 \"knight-idle-32\"）；画板会存进宿主画廊\n- 导出：export_png（scale 建议 8，预览用）；export_spritesheet 有多帧时\n\n■ 常见错误对照\n- 逐 draw_pixel 画大形 → 立刻改用 draw_batch（一次 64 op，验证先行，报错会指出第几个 op）\n- 画完不核对 → 每阶段必 canvas_read 或 canvas_diff；盲画是浪费 token 的根源\n- 参数错重画全部 → checkpoint_rollback 到最近检查点，只回滚错误部分\n- 颜色越加越多 → 回到 palette 纪律，超过档位数先 replace_color 收敛\n\n■ 工具速查（本方法论依赖）\ncanvas_create / draw_batch(ops,dry_run) / canvas_read(format=sketch) / canvas_ascii / canvas_diff(mode=last_op) / canvas_checksum / checkpoint_set / checkpoint_rollback / palette_list / palette_closest_color / replace_color / canvas_describe / session_save / export_png",
+  "category": "AGENT",
+  "tags": ["pixel-art", "sprite", "drawing", "pixel-lab", "methodology"],
+  "homepage": "https://github.com/AceGuru-mjh/Pixel-Lab",
+  "repository": "https://github.com/AceGuru-mjh/Pixel-Lab",
+  "trustLevel": "verified",
+  "bundled": false,
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-09-26",
+      "changes": ["初始版本：剪影优先三阶段方法论 + Pixel-Lab V6 工具链（draw_batch/checkpoint/canvas_read）工作节奏"]
+    }
+  ]
+}

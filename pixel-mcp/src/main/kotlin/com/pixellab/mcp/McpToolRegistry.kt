@@ -396,13 +396,23 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         // ---- canvas ----
 
-        add("canvas_create", "Creates a new blank canvas session (16x16 pico-8 by default; each edge must stay within 1..8192).", "canvas",
-            "width" to "integer", "height" to "integer", "palette_id" to "string", "name" to "string") { params, store ->
+        add("canvas_create", "Creates a new blank canvas session (16x16 pico-8 by default; each edge must stay within 1..8192). Pass session_id to pin the session to an id you choose — otherwise one is generated for you. Any later tool call with that session_id addresses this canvas.", "canvas",
+            "width" to "integer", "height" to "integer", "palette_id" to "string", "name" to "string", "session_id" to "string") { params, store ->
             val palette = paletteParam(params) ?: BuiltInPalettes.PICO8
             val width = params.opt("width", 16)
             val height = params.opt("height", 16)
             requireSize(width, height)
-            val session = store.newSession(palette, width, height, params.opt("name", "untitled"))
+            val requestedId = params.opt("session_id", "")
+            if (requestedId.isNotEmpty() && store.get(requestedId, create = false) != null) {
+                throw IllegalArgumentException(
+                    "session_id '$requestedId' is already in use — pick a fresh id or call canvas_info to inspect it",
+                )
+            }
+            val session = if (requestedId.isNotEmpty()) {
+                store.newSession(palette, width, height, params.opt("name", "untitled"), id = requestedId)
+            } else {
+                store.newSession(palette, width, height, params.opt("name", "untitled"))
+            }
             projectSummary(session, session.project)
         }
 
@@ -974,13 +984,23 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         // ---- project ----
 
-        add("project_new", "Creates a new blank project session (alias of canvas_create; each edge must stay within 1..8192).", "project",
-            "name" to "string", "width" to "integer", "height" to "integer", "palette_id" to "string") { params, store ->
+        add("project_new", "Creates a new blank project session (alias of canvas_create; each edge must stay within 1..8192). Pass session_id to pin the session to an id you choose — otherwise one is generated for you.", "project",
+            "name" to "string", "width" to "integer", "height" to "integer", "palette_id" to "string", "session_id" to "string") { params, store ->
             val palette = paletteParam(params) ?: BuiltInPalettes.PICO8
             val width = params.opt("width", 16)
             val height = params.opt("height", 16)
             requireSize(width, height)
-            val session = store.newSession(palette, width, height, params.opt("name", "untitled"))
+            val requestedId = params.opt("session_id", "")
+            if (requestedId.isNotEmpty() && store.get(requestedId, create = false) != null) {
+                throw IllegalArgumentException(
+                    "session_id '$requestedId' is already in use — pick a fresh id or call canvas_info to inspect it",
+                )
+            }
+            val session = if (requestedId.isNotEmpty()) {
+                store.newSession(palette, width, height, params.opt("name", "untitled"), id = requestedId)
+            } else {
+                store.newSession(palette, width, height, params.opt("name", "untitled"))
+            }
             projectSummary(session, session.project)
         }
 

@@ -470,6 +470,17 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         return history.undo.map { HistoryEntry(it.label, it.timestamp) }
     }
 
+    /**
+     * Non-mutating read of the state *before* the most recent change of
+     * [projectId] — the snapshot [undo] would restore — without touching
+     * either stack. Powers read-only inspections such as "what did my last
+     * operation actually change?" diffs.
+     *
+     * @return the pre-change project, or null when there is nothing to undo.
+     */
+    fun peekBefore(projectId: String): SpriteProject? =
+        histories[projectId]?.undo?.lastOrNull()?.before
+
     /** Drops all undo and redo records of [projectId]. */
     fun clearHistory(projectId: String) {
         histories.remove(projectId)

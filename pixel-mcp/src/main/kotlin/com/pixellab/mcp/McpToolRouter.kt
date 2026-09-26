@@ -47,7 +47,7 @@ class McpToolRouter(lab: PixelLab) {
         val execute: suspend (String, JsonObject, PixelSessionStore) -> JsonObject,
     )
 
-    /** Ordered chain: tier 1 first, tier 4 last. */
+    /** Ordered chain: tier 1 first, tier 5 last. */
     private val tiers: List<Tier>
 
     /** Direct references for session-state cleanup dispatch. */
@@ -68,6 +68,7 @@ class McpToolRouter(lab: PixelLab) {
         val v2 = McpToolRegistryV2
         val tier3 = McpToolRegistryV3(lab)
         val tier4 = McpToolRegistryV4(lab)
+        val tier5 = McpToolRegistryV5(lab)
         v3 = tier3
         v4 = tier4
         tiers = listOf(
@@ -75,6 +76,7 @@ class McpToolRouter(lab: PixelLab) {
             Tier(2, v2.tools().map { it.name }.toSet(), v2.tools(), { v2.inputSchema(it) }, { n, p, s -> v2.execute(n, p, s) }),
             Tier(3, tier3.tools().map { it.name }.toSet(), tier3.tools(), { tier3.inputSchema(it) }, { n, p, s -> tier3.execute(n, p, s) }),
             Tier(4, tier4.tools.map { it.name }.toSet(), tier4.tools, { tier4.schemas[it] ?: emptySchema() }, { n, p, s -> tier4.execute(n, p, s) }),
+            Tier(5, tier5.tools.map { it.name }.toSet(), tier5.tools, { tier5.schemas[it] ?: emptySchema() }, { n, p, s -> tier5.execute(n, p, s) }),
         )
         val ordered = ArrayList<McpTool>()
         val byName = LinkedHashMap<String, Int>()
@@ -97,7 +99,7 @@ class McpToolRouter(lab: PixelLab) {
     /** Total number of dispatchable tools across all tiers. */
     fun toolCount(): Int = tools.size
 
-    /** The registry tier (1..4) that owns [name], or null when unknown. */
+    /** The registry tier (1..5) that owns [name], or null when unknown. */
     fun tierOf(name: String): Int? = tiers.firstOrNull { name in it.names }?.number
 
     /** JSON schema of [name]; an empty object schema for unknown names. */

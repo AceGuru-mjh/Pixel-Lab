@@ -89,7 +89,8 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #45 | 色彩科学 + 矢量：Machado/Viénot 色盲模拟 + WCAG 对比度审计 + CSS 命名 + 开尔文色温 + MarchingSquares + SVG/SMIL 导出 | +1,833 行 |
 | PR #46 | MCP v4：32 新工具（总 **151**）+ 配方 13-18 | +1,249 行 |
 | PR #47 | **集成验证与加固**：tier-chain 路由（151 工具全上线）+ WS 传输接线 + 10 项缺陷修复（含 100-Continue/Int 溢出/无界画线/历史泄漏）+ Agent 理解力实测 8/8 + CI 加 pixel-mcp 门禁 | +~600 行净增（含修复） |
-| **合计** | | **49,680+ 行**（Kotlin 47,538+ + C++ 2,142+），**151 个 MCP 工具** |
+| PR #48 | **Agent 视觉（V5）**：describe 包 7 组件（ASCII 渲染/区域读取/色彩普查/结构/对称/帧差/自然语言描述）+ 11 个只读工具（总 **162**）+ canvas_create session_id 契约修复 + 引擎 peekBefore + 18 项单测 | +2,950 行 |
+| **合计** | | **52,630+ 行**（Kotlin 50,488+ + C++ 2,142+），**162 个 MCP 工具** |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

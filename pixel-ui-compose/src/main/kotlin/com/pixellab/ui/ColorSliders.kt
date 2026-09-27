@@ -242,7 +242,7 @@ fun ColorSliders(
             valueText = g.toString(),
             fraction = g / 255f,
         ) { f ->
-            onColorChange((argb and 0xFF00FFFF.toInt()) or (channel(f) shl 8))
+            onColorChange((argb and 0xFFFF00FF.toInt()) or (channel(f) shl 8))
         }
         SliderRow(
             theme = theme,

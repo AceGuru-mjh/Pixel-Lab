@@ -9,7 +9,7 @@ import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.utf16CodePoint
 import com.pixellab.ui.theme.PixelTheme
 
@@ -22,7 +22,7 @@ import com.pixellab.ui.theme.PixelTheme
  * hosts, `Alt`/`Option` mapped by the host.
  */
 data class Shortcut(
-    /** Key name, e.g. `"B"`, `"Z"`, `"+"`, `"ArrowLeft"`, `"Space"`. */
+    /** Key name, e.g. `"B"`, `"Z"`, `"+"`, `"Left"`, `"Space"`. */
     val key: String,
     /** Whether Ctrl (platform primary modifier) must be held. */
     val ctrl: Boolean = false,
@@ -45,7 +45,7 @@ data class Shortcut(
 
     /**
      * Human-readable form, modifiers first, key last:
-     * `"Ctrl+Shift+Z"`, `"Alt+P"`, `"B"`, `"ArrowLeft"`.
+     * `"Ctrl+Shift+Z"`, `"Alt+P"`, `"B"`, `"Left"`.
      */
     fun display(): String = buildString {
         if (ctrl) append("Ctrl+")
@@ -137,10 +137,10 @@ class ShortcutMap {
         put(Shortcut("-"), ShortcutAction.ZOOM_OUT)
         put(Shortcut("X"), ShortcutAction.SWAP_COLORS)
         put(Shortcut("S", ctrl = true), ShortcutAction.SAVE)
-        put(Shortcut("ArrowLeft"), ShortcutAction.NUDGE_LEFT)
-        put(Shortcut("ArrowRight"), ShortcutAction.NUDGE_RIGHT)
-        put(Shortcut("ArrowUp"), ShortcutAction.NUDGE_UP)
-        put(Shortcut("ArrowDown"), ShortcutAction.NUDGE_DOWN)
+        put(Shortcut("Left"), ShortcutAction.NUDGE_LEFT)
+        put(Shortcut("Right"), ShortcutAction.NUDGE_RIGHT)
+        put(Shortcut("Up"), ShortcutAction.NUDGE_UP)
+        put(Shortcut("Down"), ShortcutAction.NUDGE_DOWN)
         put(Shortcut("Space"), ShortcutAction.PAN_MODIFIER)
         for (digit in 1..9) put(Shortcut(digit.toString()), ShortcutAction.SELECT_PALETTE_SLOT)
     }
@@ -222,9 +222,11 @@ class ShortcutMap {
 /**
  * Keyboard interception wrapper for the whole editor UI.
  *
- * Every key event preview is resolved through [map]; a match dispatches
- * [onAction] and the event is considered consumed, unmatched events pass
- * through to the children untouched.
+ * Key events are resolved in the **bubbling** phase: children consume the
+ * keys they need first — text fields keep every printable keystroke for
+ * themselves — and only events no child claimed reach this layer. A match
+ * dispatches [onAction] and the event is considered consumed; unmatched
+ * events pass through to the ancestors untouched.
  *
  * Stub-world note: the compile-only `KeyEvent` stub normalizes a key press
  * to (`key name`, ctrl/shift/alt flags) with no down/up distinction, so
@@ -255,7 +257,7 @@ fun ShortcutLayer(
     val currentOnAction = rememberUpdatedState(onAction)
     val currentOnShortcut = rememberUpdatedState(onShortcut)
     Box(
-        modifier = modifier.onPreviewKeyEvent { event: KeyEvent ->
+        modifier = modifier.onKeyEvent { event: KeyEvent ->
             val label = keyLabelOf(event)
             val shortcut = map.findShortcut(
                 label,

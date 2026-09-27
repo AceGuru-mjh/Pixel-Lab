@@ -136,7 +136,7 @@ fun HistoryPanel(
                         onClick = { onJumpTo(0) },
                     )
                 }
-                items(newestFirst.size, key = { i -> newestFirst[i].timestampMs * 31 + i }) { i ->
+                items(newestFirst.size, key = { i -> i }) { i ->
                     val entry = newestFirst[i]
                     val depth = entries.size - i
                     HistoryRow(

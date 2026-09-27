@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -27,10 +30,18 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -400,7 +411,12 @@ fun TimelinePro(
                 Icon(imageVector = Icons.Filled.Add, contentDescription = "Add frame")
             }
             IconButton(onClick = { onDuplicateFrame(active) }) {
-                Text(text = "⧉", fontSize = 14.sp, color = theme.textPrimary)
+                Text(
+                    text = "⧉",
+                    fontSize = 14.sp,
+                    color = theme.textPrimary,
+                    modifier = Modifier.semantics { contentDescription = "Duplicate frame" },
+                )
             }
             IconButton(
                 onClick = { if (project.frameCount > 1) onDeleteFrame(active) },
@@ -412,18 +428,28 @@ fun TimelinePro(
                 onClick = { if (active > 0) onMoveFrame(active, active - 1) },
                 enabled = active > 0,
             ) {
-                Text(text = "◀", fontSize = 12.sp, color = theme.textPrimary)
+                Text(
+                    text = "◀",
+                    fontSize = 12.sp,
+                    color = theme.textPrimary,
+                    modifier = Modifier.semantics { contentDescription = "Move frame left" },
+                )
             }
             IconButton(
                 onClick = { if (active < project.frameCount - 1) onMoveFrame(active, active + 1) },
                 enabled = active < project.frameCount - 1,
             ) {
-                Text(text = "▶", fontSize = 12.sp, color = theme.textPrimary)
+                Text(
+                    text = "▶",
+                    fontSize = 12.sp,
+                    color = theme.textPrimary,
+                    modifier = Modifier.semantics { contentDescription = "Move frame right" },
+                )
             }
         }
 
         // ---- frame strip ----------------------------------------------------
-        Box(modifier = Modifier.height(FrameCardWidth + 8.dp)) {
+        Box(modifier = Modifier.heightIn(min = FrameCardWidth + 8.dp)) {
             LazyRow {
                 items(project.frames.size) { index ->
                     FrameCard(
@@ -438,8 +464,30 @@ fun TimelinePro(
         }
 
         // ---- duration override editor ----------------------------------------
+        // Local draft: typing only mutates the draft, so half-finished edits
+        // never pollute the history; the committed duration changes once, on
+        // the keyboard Done action. The remember re-keys per frame id and the
+        // LaunchedEffect resyncs the draft whenever the committed duration
+        // moves underneath it (undo/redo, Reset, host-side edits).
         val frame = project.frames[active]
-        val durationText = frame.durationMs?.toString() ?: ""
+        var durationDraft by remember(frame.id) {
+            mutableStateOf(frame.durationMs?.toString() ?: "")
+        }
+        LaunchedEffect(frame.durationMs) {
+            durationDraft = frame.durationMs?.toString() ?: ""
+        }
+
+        fun commitDurationDraft() {
+            val trimmed = durationDraft.trim()
+            if (trimmed.isEmpty()) {
+                onDurationChange(active, null)
+            } else {
+                trimmed.toIntOrNull()?.let { ms ->
+                    if (ms in 1..MaxDurationMs) onDurationChange(active, ms)
+                }
+            }
+        }
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "Frame ${active + 1} duration (ms)",
@@ -447,20 +495,18 @@ fun TimelinePro(
                 color = theme.textSecondary,
             )
             OutlinedTextField(
-                value = durationText,
-                onValueChange = { text ->
-                    val trimmed = text.trim()
-                    if (trimmed.isEmpty()) {
-                        onDurationChange(active, null)
-                    } else {
-                        trimmed.toIntOrNull()?.let { ms ->
-                            if (ms in 1..MaxDurationMs) onDurationChange(active, ms)
-                        }
-                    }
-                },
+                value = durationDraft,
+                onValueChange = { text -> durationDraft = text },
                 modifier = Modifier.width(88.dp),
                 singleLine = true,
                 placeholder = { Text(text = "auto", fontSize = 11.sp) },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = { commitDurationDraft() },
+                ),
             )
             if (frame.durationMs != null) {
                 TextButton(onClick = { onDurationChange(active, null) }) {
@@ -486,6 +532,9 @@ private fun FrameCard(
     onClick: () -> Unit,
 ) {
     val composited = remember(project, index) { project.compositeFrame(index) }
+    // Bitmap conversion stays out of the draw scope: recompositions reuse one
+    // ImageBitmap instead of rebuilding it on every invalidation pass.
+    val bitmap = remember(composited) { composited.toImageBitmap() }
     val tag = remember(project, index) { project.tags.firstOrNull { index in it } }
     val tagStarts = remember(project, index) {
         tag != null && tag.startFrame == index
@@ -504,7 +553,7 @@ private fun FrameCard(
         Column(modifier = Modifier.padding(4.dp)) {
             Canvas(modifier = Modifier.size(FrameThumbSize)) {
                 drawImage(
-                    composited.toImageBitmap(),
+                    image = bitmap,
                     dstOffset = IntOffset.Zero,
                     dstSize = IntSize(FrameThumbSize.value.toInt(), FrameThumbSize.value.toInt()),
                     filterQuality = FilterQuality.None,

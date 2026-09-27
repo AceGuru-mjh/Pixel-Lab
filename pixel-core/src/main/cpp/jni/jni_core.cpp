@@ -57,7 +57,7 @@ Java_com_pixellab_core_nativelib_NativeQuantizer_nativeQuantize(
         pixel_lab::throwIAE(env, "quantize argument shape mismatch");
         return 0;
     }
-    pixel_lab::ScopedIntArray in(env, pixels);
+    pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
     if (!in.valid()) {
         return 0;
     }
@@ -110,8 +110,11 @@ Java_com_pixellab_core_nativelib_NativeDitherer_nativeDither(
         pixel_lab::throwIAE(env, "dither argument shape mismatch");
         return;
     }
-    pixel_lab::ScopedIntArray in(env, pixels);
-    pixel_lab::ScopedIntArray pal(env, palette);
+    // Inputs are read-only: the dithered result is written into the pinned
+    // buffer as scratch and then copied out; releasing with copy-back would
+    // clobber the caller's immutable input array.
+    pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
+    pixel_lab::ScopedIntArray pal(env, palette, /*copyBack=*/false);
     if (!in.valid() || !pal.valid()) {
         return;
     }
@@ -142,8 +145,9 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeSetPixelsBatch(
         pixel_lab::throwIAE(env, "batch write argument shape mismatch");
         return -1;
     }
-    pixel_lab::ScopedIntArray in(env, pixels);
-    pixel_lab::ScopedIntArray pts(env, points);
+    // Read-only inputs (see the dither note): the batch result goes to out.
+    pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
+    pixel_lab::ScopedIntArray pts(env, points, /*copyBack=*/false);
     if (!in.valid() || !pts.valid()) {
         return -1;
     }
@@ -169,7 +173,9 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeFloodFill(
         pixel_lab::throwIAE(env, "flood fill argument shape mismatch");
         return -1;
     }
-    pixel_lab::ScopedIntArray in(env, pixels);
+    // Read-only input: the filled result is written to scratch and copied
+    // out; copy-back would mutate the immutable frame the caller passed.
+    pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
     if (!in.valid()) {
         return -1;
     }
@@ -206,8 +212,8 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeCompositeLayers(
         pixel_lab::releaseFrameArrays(env, buffers, refs, JNI_ABORT);
         return -1;
     }
-    pixel_lab::ScopedIntArray w(env, widths);
-    pixel_lab::ScopedIntArray h(env, heights);
+    pixel_lab::ScopedIntArray w(env, widths, /*copyBack=*/false);
+    pixel_lab::ScopedIntArray h(env, heights, /*copyBack=*/false);
     pixel_lab::ScopedFloatArray op(env, opacities);
     if (!w.valid() || !h.valid() || !op.valid()) {
         pixel_lab::releaseFrameArrays(env, buffers, refs, JNI_ABORT);
@@ -264,8 +270,8 @@ Java_com_pixellab_core_nativelib_NativeGifEncoder_nativeEncodeGif(
         pixel_lab::releaseFrameArrays(env, buffers, refs, JNI_ABORT);
         return nullptr;
     }
-    pixel_lab::ScopedIntArray sizes(env, frameSizes);
-    pixel_lab::ScopedIntArray delays(env, delaysMs);
+    pixel_lab::ScopedIntArray sizes(env, frameSizes, /*copyBack=*/false);
+    pixel_lab::ScopedIntArray delays(env, delaysMs, /*copyBack=*/false);
     if (!sizes.valid() || !delays.valid()) {
         pixel_lab::releaseFrameArrays(env, buffers, refs, JNI_ABORT);
         return nullptr;

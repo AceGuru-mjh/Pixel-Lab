@@ -126,7 +126,14 @@ class PixelFrame private constructor(
      */
     fun transformed(newWidth: Int, newHeight: Int, sample: (x: Int, y: Int) -> Int): PixelFrame {
         require(newWidth > 0 && newHeight > 0) { "Transformed dimensions must be positive" }
-        val out = IntArray(newWidth * newHeight)
+        // Long-domain guard: the private constructor bypassed `of()`'s
+        // validation, so 65536x65536 used to wrap to IntArray(0) here and
+        // return a malformed frame that exploded on first access.
+        val count = newWidth.toLong() * newHeight.toLong()
+        require(count <= Int.MAX_VALUE) {
+            "Transformed frame ${newWidth}x${newHeight} needs $count pixels, beyond the Int array limit"
+        }
+        val out = IntArray(count.toInt())
         var i = 0
         for (y in 0 until newHeight) {
             for (x in 0 until newWidth) {
@@ -177,7 +184,13 @@ class PixelFrame private constructor(
     fun scaledNearest(scale: Int): PixelFrame {
         require(scale >= 1) { "scale must be >= 1 (was $scale)" }
         if (scale == 1) return this
-        val out = IntArray(width * scale * height * scale)
+        // Long-domain: `width * scale * height * scale` wraps for large
+        // frames/scales (NegativeArraySizeException or a malformed frame).
+        val scaledCount = width.toLong() * scale * height.toLong() * scale
+        require(scaledCount <= Int.MAX_VALUE) {
+            "Scaled frame ${width}x${height}@$scale needs $scaledCount pixels, beyond the Int array limit"
+        }
+        val out = IntArray(scaledCount.toInt())
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val c = pixels[y * width + x]
@@ -215,7 +228,23 @@ class PixelFrame private constructor(
         return width == other.width && height == other.height && pixels.contentEquals(other.pixels)
     }
 
-    override fun hashCode(): Int = 31 * (31 * width + height) + pixels.contentHashCode()
+    /**
+     * Computed once and cached: frames sit in hash maps on every hot path
+     * (bitmap caches, dedup sets) and a per-call `contentHashCode` over a
+     * 1024x1024 raster is a million integer hashes for nothing. Valid to
+     * cache because the constructor contract forbids post-construction
+     * mutation of [pixels].
+     */
+    private var cachedHashCode: Int = 0
+
+    override fun hashCode(): Int {
+        var value = cachedHashCode
+        if (value == 0) {
+            value = 31 * (31 * width + height) + pixels.contentHashCode()
+            cachedHashCode = value
+        }
+        return value
+    }
 
     override fun toString(): String = "PixelFrame(${width}x${height})"
 }
@@ -226,11 +255,18 @@ class PixelFrame private constructor(
  * so the immutable frame stays truly immutable.
  */
 class MutablePixelFrame(val width: Int, val height: Int) {
-    private val pixels: IntArray = IntArray(width * height)
-
     init {
         require(width > 0 && height > 0) { "Mutable frame dimensions must be positive" }
+        // Long-domain: 65536x65536 wrapped to IntArray(0) here while the
+        // width/height fields claimed 4.3 billion cells — every subsequent
+        // set() threw AIOOBE on a "successfully" constructed workspace.
+        val count = width.toLong() * height.toLong()
+        require(count <= Int.MAX_VALUE) {
+            "Mutable frame ${width}x${height} needs $count pixels, beyond the Int array limit"
+        }
     }
+
+    private val pixels: IntArray = IntArray((width.toLong() * height.toLong()).toInt())
 
     /** Reads the pixel at (`x`, `y`); out-of-bounds reads return 0. */
     operator fun get(x: Int, y: Int): Int {

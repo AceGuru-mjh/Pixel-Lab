@@ -21,6 +21,15 @@ data class Checkpoint(
     val projectId: String,
     /** Undo-stack depth at record time (0 = pristine). */
     val depth: Int,
+    /**
+     * Commit serial of the newest history entry at record time (0 when the
+     * history was empty). Together with [depth] this is the *dual anchor*:
+     * depth alone cannot tell "same state" from "same depth, different
+     * branch" after a diverging undo-then-record sequence, and eviction
+     * silently shifts which state a bare depth points at. The serial is
+     * assigned by the engine monotonically per project and never reused.
+     */
+    val topSerial: Long,
     /** Wall-clock creation time (ms). */
     val createdAtMs: Long,
     /** Label of the *next* entry that would sit above the checkpoint,
@@ -95,6 +104,7 @@ class CheckpointTracker {
             name = name.trim(),
             projectId = projectId,
             depth = history.size,
+            topSerial = history.lastOrNull()?.serial ?: 0L,
             createdAtMs = System.currentTimeMillis(),
             nextLabel = history.lastOrNull()?.label,
         )
@@ -137,11 +147,23 @@ class CheckpointTracker {
      * depths describe the old lineage and undoing the new project's
      * history to reach them would corrupt unrelated work.
      *
-     * Idempotence: when history is already at or below the checkpoint
-     * depth (the user undid past it), the result reports zero steps and
-     * `rewound = false` rather than failing.
+     * Dual-anchor guard: after the lineage check the current history must
+     * still *contain* the checkpointed state — the entry at [Checkpoint.depth]
+     * positions from the bottom must carry [Checkpoint.topSerial]. A
+     * diverging undo-then-record sequence leaves the depth intact while the
+     * state moves to a different branch, and depth-cap eviction drops the
+     * bottom entries entirely; both used to make this loop undo nothing and
+     * report "already at the checkpoint" while the canvas kept the changes
+     * the caller wanted gone. Both now fail loudly instead.
      *
-     * @throws IllegalStateException on stale lineage or missing checkpoint.
+     * Idempotence: when history is already AT the checkpoint (same depth,
+     * same anchor serial) the result reports zero steps and `rewound =
+     * false` rather than failing; being *below* it (the user undid past
+     * the checkpoint and the entries are still on the redo stack) is the
+     * unreachable case and throws.
+     *
+     * @throws IllegalStateException on stale lineage, missing checkpoint,
+     *   a checkpoint evicted below the undo horizon, or a diverged branch.
      */
     fun rollback(
         sessionKey: String,
@@ -157,6 +179,26 @@ class CheckpointTracker {
             throw IllegalStateException(
                 "checkpoint '$name' belongs to project ${checkpoint.projectId} but the session " +
                     "now holds $projectId (project was swapped); the depth no longer describes this history",
+            )
+        }
+        val history = engine.historyInfo(projectId)
+        // Evicted: the checkpointed state sat below the current undo
+        // horizon — depth-cap eviction (or a clearHistory) removed it.
+        if (history.size < checkpoint.depth) {
+            throw IllegalStateException(
+                "checkpoint '$name' is unreachable: the undo history holds ${history.size} " +
+                    "entries but the checkpoint anchors entry #${checkpoint.depth} " +
+                    "(evicted by the depth cap or cleared by a load)",
+            )
+        }
+        val anchor = history.getOrNull(checkpoint.depth - 1)
+        // Diverged: same depth, different branch — the serial identity of
+        // the checkpointed state no longer sits at the anchored position.
+        if (checkpoint.topSerial != 0L && anchor?.serial != checkpoint.topSerial) {
+            throw IllegalStateException(
+                "checkpoint '$name' is unreachable: the history branched after the checkpoint " +
+                    "(undo followed by new edits replaced entry #${checkpoint.depth}); " +
+                    "the checkpointed state no longer exists on any stack",
             )
         }
         var steps = 0

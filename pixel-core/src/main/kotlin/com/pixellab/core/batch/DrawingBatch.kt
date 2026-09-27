@@ -157,6 +157,21 @@ object DrawingBatch {
     /** Upper bound for ops in one batch (DoS guard). */
     const val MAX_OPS: Int = 64
 
+    /**
+     * Ceiling for any single materialized shape (rect area, circle bounding
+     * square). Validation must reject these BEFORE apply: the engine
+     * materializes points eagerly, so a passing giant rect used to OOM
+     * mid-batch with earlier ops already on the canvas — breaking the
+     * all-or-nothing promise of dry-run validation.
+     */
+    public const val MAX_SHAPE_AREA: Int = 4_194_304
+
+    /** Radius ceiling for batch circles, mirroring DrawOps/PixelEngine. */
+    public const val MAX_CIRCLE_RADIUS: Int = 65_536
+
+    /** Bresenham step ceiling per line, mirroring DrawOps. */
+    public const val MAX_LINE_SPAN: Long = 262_144L
+
     /** Brush thickness range accepted for line and stroke ops. */
     const val MAX_THICKNESS: Int = 16
 
@@ -190,6 +205,18 @@ object DrawingBatch {
                             "thickness ${op.thickness} outside 1..$MAX_THICKNESS",
                         )
                     }
+                    // The engine's Bresenham caps the span at 262144 steps;
+                    // validating the same bound here keeps a bad line from
+                    // failing at apply time (after earlier ops already
+                    // landed), breaking batch atomicity.
+                    val spanX = kotlin.math.abs(op.x1.toLong() - op.x0.toLong())
+                    val spanY = kotlin.math.abs(op.y1.toLong() - op.y0.toLong())
+                    if (spanX > MAX_LINE_SPAN || spanY > MAX_LINE_SPAN) {
+                        throw BatchValidationException(
+                            index, "line",
+                            "line span ($spanX,$spanY) exceeds the $MAX_LINE_SPAN step limit",
+                        )
+                    }
                     spanGuard(index, "line", op.x0, op.y0, op.x1, op.y1, project.width, project.height)
                 }
                 is BatchOp.Rect -> {
@@ -197,6 +224,15 @@ object DrawingBatch {
                         throw BatchValidationException(
                             index, "rect",
                             "size ${op.width}x${op.height} must have edges >= 1",
+                        )
+                    }
+                    // Filled rects materialize one point per cell; a 100000
+                    // squared rect would allocate 1e10 points at apply.
+                    if (op.width.toLong() * op.height.toLong() > MAX_SHAPE_AREA) {
+                        throw BatchValidationException(
+                            index, "rect",
+                            "rect ${op.width}x${op.height} materializes ${op.width.toLong() * op.height} points, " +
+                                "above the $MAX_SHAPE_AREA cap (draw in tiles instead)",
                         )
                     }
                     spanGuard(
@@ -208,6 +244,12 @@ object DrawingBatch {
                     if (op.radius < 0) {
                         throw BatchValidationException(
                             index, "circle", "radius ${op.radius} must be >= 0",
+                        )
+                    }
+                    if (op.radius > MAX_CIRCLE_RADIUS) {
+                        throw BatchValidationException(
+                            index, "circle",
+                            "radius ${op.radius} above the $MAX_CIRCLE_RADIUS cap",
                         )
                     }
                     val reach = op.radius + 1

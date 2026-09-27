@@ -96,13 +96,60 @@ class CheckpointTrackerTest {
     }
 
     @Test
-    fun `rollback past checkpoint manually then rollback reports zero steps`() {
+    fun `rolling back past the checkpoint manually is reported as unreachable, not silently clean`() {
         drawSteps(3)
         tracker.set("s1", "safe", project.id, engine)
         engine.undo(project.id) // user undoes past depth 3 → depth 2
+        // The old behavior answered zero steps / rewound=false — claiming
+        // the canvas was already at the checkpoint when in fact the user
+        // was on a DIFFERENT branch below it. The dual anchor detects the
+        // divergence (the redo stack holds the checkpointed entries) and
+        // fails loudly instead.
+        try {
+            tracker.rollback("s1", "safe", project.id, engine)
+            throw AssertionError("expected divergence failure")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message!!.contains("unreachable"))
+        }
+    }
+
+    @Test
+    fun `checkpoint at the exact current position is idempotent`() {
+        drawSteps(3)
+        tracker.set("s1", "safe", project.id, engine)
         val result = tracker.rollback("s1", "safe", project.id, engine)
         assertFalse(result.rewound)
         assertEquals(0, result.steps)
+    }
+
+    @Test
+    fun `divergent branch at the same depth is refused`() {
+        drawSteps(3)
+        tracker.set("s1", "safe", project.id, engine)
+        engine.undo(project.id) // depth 2
+        drawSteps(1) // re-record → depth 3, but a DIFFERENT entry sits there
+        try {
+            tracker.rollback("s1", "safe", project.id, engine)
+            throw AssertionError("expected branch-divergence failure")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message!!.contains("branched"))
+        }
+    }
+
+    @Test
+    fun `cleared or evicted checkpoint is refused`() {
+        // A load boundary clears the engine history (see the V6 session_load
+        // fix): the checkpoint's anchored entries no longer exist at any
+        // depth, which must fail loudly instead of reporting "already there".
+        drawSteps(3)
+        tracker.set("s1", "evicted", project.id, engine)
+        engine.clearHistory(project.id)
+        try {
+            tracker.rollback("s1", "evicted", project.id, engine)
+            throw AssertionError("expected unreachable failure")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message!!.contains("unreachable"))
+        }
     }
 
     @Test

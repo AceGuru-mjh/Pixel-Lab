@@ -576,7 +576,7 @@ class McpToolRegistryV6(
 
         add(
             "session_load",
-            "Restores a saved slot into a session: with session_id the current session's project is replaced (undo history of the old project is kept but unreachable through it); without session_id a fresh session is created. Returns the new/updated session_id plus the project summary.",
+            "Restores a saved slot into a session: with session_id the current session's project is replaced (the engine undo history is CLEARED — pre-load undo records described the old document lineage and restoring them would resurrect unrelated states); without session_id a fresh session is created. Returns the new/updated session_id plus the project summary.",
             "v6-persist",
             "session_id" to "string", "name" to "string",
             required = listOf("name"),
@@ -591,6 +591,11 @@ class McpToolRegistryV6(
                 store.newSession(palette = project.palette, id = "sess-" + java.lang.Long.toString(System.nanoTime(), 36))
             }
             store.update(session.id, project)
+            // Load boundary: any engine history keyed to this project id
+            // describes a previous editing session's timeline. Keeping it
+            // made project_undo answer with states from before the load —
+            // resurrecting stale snapshots onto the restored document.
+            lab.engine.clearHistory(project.id)
             jsonobj {
                 put("session_id", session.id)
                 put("name", name)

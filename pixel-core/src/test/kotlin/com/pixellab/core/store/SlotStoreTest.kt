@@ -15,8 +15,10 @@ import org.junit.rules.TemporaryFolder
 
 /**
  * Unit tests for [SlotStore]: save/load round trips, name policy,
- * overwrite semantics, corrupt-document tolerance and listing order —
- * each against a real [ProjectStore] in a temp folder.
+ * snapshot semantics (a save materializes an immutable per-save project
+ * id — two saves of one project never overwrite each other),
+ * corrupt-document tolerance and listing order — each against a real
+ * [ProjectStore] in a temp folder.
  */
 class SlotStoreTest {
 
@@ -40,7 +42,9 @@ class SlotStoreTest {
         slots.save("knight-idle", drawn, "sess-1", projects)
 
         val loaded = slots.load("knight-idle", projects)
-        assertEquals(drawn.id, loaded.id)
+        // Snapshot semantics: the loaded project carries a fresh snapshot id
+        // derived from the saved project's id (save never overwrites).
+        assertTrue(loaded.id.startsWith(drawn.id))
         assertEquals(TestFrames.RED, loaded.compositeActiveFrame()[2, 2])
         assertEquals(TestFrames.RED, loaded.compositeActiveFrame()[3, 3])
     }
@@ -53,7 +57,7 @@ class SlotStoreTest {
         )
         val summary = slots.save("sword", drawn, "sess-42", projects)
         assertEquals("sword", summary.name)
-        assertEquals(drawn.id, summary.projectId)
+        assertTrue(summary.projectId.startsWith(drawn.id))
         assertEquals("sword", summary.projectName)
         assertEquals(8, summary.width)
         assertEquals(8, summary.height)
@@ -66,7 +70,7 @@ class SlotStoreTest {
 
         val found = slots.find("sword")
         assertNotNull(found)
-        assertEquals(drawn.id, found!!.projectId)
+        assertTrue(found!!.projectId.startsWith(drawn.id))
         assertNull(slots.find("missing"))
     }
 
@@ -80,10 +84,13 @@ class SlotStoreTest {
         slots.save("slot", b, "s1", projects)
         val list = slots.list()
         assertEquals(1, list.size)
-        assertEquals(b.id, list[0].projectId)
+        assertTrue(list[0].projectId.startsWith(b.id))
         assertEquals("second", list[0].projectName)
-        // Both projects still exist on disk; only the pointer moved.
+        // Both SNAPSHOTS still exist on disk; the pointer moved, nothing
+        // was overwritten — this is the fix for the same-id clobber.
         assertEquals(2, projects.list().size)
+        assertTrue(projects.list().any { it.id.startsWith(a.id) })
+        assertTrue(projects.list().any { it.id.startsWith(b.id) })
     }
 
     @Test
@@ -103,10 +110,11 @@ class SlotStoreTest {
         val (projects, slots) = newStores()
         val p = project()
         slots.save("gone", p, "s", projects)
+        val saved = slots.find("gone")!!
         assertTrue(slots.delete("gone"))
         assertFalse(slots.delete("gone"))
         assertNull(slots.find("gone"))
-        assertTrue(projects.list().any { it.id == p.id })
+        assertTrue(projects.list().any { it.id == saved.projectId })
     }
 
     @Test
@@ -170,8 +178,8 @@ class SlotStoreTest {
     fun `load of dangling slot (project deleted) is an actionable error`() {
         val (projects, slots) = newStores()
         val p = project()
-        slots.save("dangling", p, "s", projects)
-        projects.delete(p.id)
+        val summary = slots.save("dangling", p, "s", projects)
+        projects.delete(summary.projectId)
         try {
             slots.load("dangling", projects)
             throw AssertionError("expected missing-project failure")

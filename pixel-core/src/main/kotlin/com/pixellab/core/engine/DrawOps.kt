@@ -39,6 +39,13 @@ object DrawOps {
      */
     private const val MAX_LINE_SPAN = 262_144
 
+    /**
+     * Circle radius ceiling. The midpoint loop iterates O(r) with an O(r)
+     * point set (filled: (2r+1)^2 cells); an unchecked 5e8 radius took 25
+     * seconds to OOM in the audit. 65536 already dwarfs any pixel-art canvas.
+     */
+    private const val MAX_CIRCLE_RADIUS = 65_536
+
     /** Bresenham integer line from (`x0`, `y0`) to (`x1`, `y1`), all octants. */
     fun line(x0: Int, y0: Int, x1: Int, y1: Int): List<PixelPoint> {
         // Long-domain: `abs(x1 - x0)` on Ints wraps for endpoints ~2e9 apart.
@@ -153,6 +160,7 @@ object DrawOps {
      */
     fun circle(cx: Int, cy: Int, r: Int, filled: Boolean): List<PixelPoint> {
         require(r >= 0) { "circle radius must be >= 0 (was $r)" }
+        require(r <= MAX_CIRCLE_RADIUS) { "circle radius must be <= $MAX_CIRCLE_RADIUS (was $r)" }
         val boundary = LinkedHashSet<PixelPoint>()
         var octantX = 0
         var octantY = r

@@ -13,11 +13,16 @@
 namespace pixel_lab {
 
 // Pins a jintArray and exposes it as a mutable int32_t view. Copies back on
-// destruction unless released early.
+// destruction (mode 0) unless constructed with copyBack=false, which releases
+// with JNI_ABORT — the correct mode for input-only buffers whose contents
+// were only ever *read*. Writing through such a view is legal scratch, but
+// the caller-side array never observes it: an aliasing hazard where an
+// immutable frame's pixel buffer would silently mutate otherwise.
 class ScopedIntArray {
 public:
-    ScopedIntArray(JNIEnv* env, jintArray array)
-        : env_(env), array_(array), size_(array ? env->GetArrayLength(array) : 0) {
+    explicit ScopedIntArray(JNIEnv* env, jintArray array, bool copyBack = true)
+        : env_(env), array_(array), copyBack_(copyBack),
+          size_(array ? env->GetArrayLength(array) : 0) {
         elements_ = array ? env->GetIntArrayElements(array, nullptr) : nullptr;
         if (array != nullptr && elements_ == nullptr) {
             failed_ = true;
@@ -26,7 +31,7 @@ public:
 
     ~ScopedIntArray() {
         if (elements_ != nullptr) {
-            env_->ReleaseIntArrayElements(array_, elements_, 0);
+            env_->ReleaseIntArrayElements(array_, elements_, copyBack_ ? 0 : JNI_ABORT);
         }
     }
 
@@ -35,7 +40,7 @@ public:
 
     ScopedIntArray(ScopedIntArray&& other) noexcept
         : env_(other.env_), array_(other.array_), elements_(other.elements_),
-          size_(other.size_), failed_(other.failed_) {
+          size_(other.size_), copyBack_(other.copyBack_), failed_(other.failed_) {
         other.elements_ = nullptr;
         other.array_ = nullptr;
     }
@@ -49,6 +54,7 @@ private:
     jintArray array_ = nullptr;
     int32_t* elements_ = nullptr;
     jsize size_ = 0;
+    bool copyBack_ = true;
     bool failed_ = false;
 };
 

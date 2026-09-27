@@ -78,10 +78,14 @@ class PixelSessionStore(
             // Registering under an id that already exists replaces that
             // session — the displaced project leaves the store's ownership
             // and must fire the discard callbacks, or its engine undo
-            // history leaks forever (histories key by project id).
+            // history leaks forever (histories key by project id). The
+            // session-scoped callback fires too: tier-local state (v3
+            // command history, v6 checkpoints) keyed to the old session
+            // must not survive into its replacement.
             val displaced = sessions.put(id, session)
             if (displaced != null) {
                 onProjectDiscarded?.invoke(displaced.project.id)
+                onSessionDiscarded?.invoke(displaced.id)
             }
             evictOverCap()
         }
@@ -144,23 +148,30 @@ class PixelSessionStore(
         sessions.clear()
     }
 
-    /** Summaries (id, project id, name, size, frame/layer counts, stamps) of all sessions. */
-    fun list(): List<JsonObject> = sessions.values
-        .sortedBy { it.createdAtMs }
-        .map { session ->
-            jsonobj {
-                put("session_id", session.id)
-                put("project_id", session.project.id)
-                put("name", session.project.name)
-                put("width", session.project.width)
-                put("height", session.project.height)
-                put("frames", session.project.frameCount)
-                put("layers", session.project.layerCount)
-                put("palette_id", session.project.palette.id)
-                put("created_at_ms", session.createdAtMs)
-                put("last_used_ms", session.lastUsedMs)
+    /**
+     * Summaries (id, project id, name, size, frame/layer counts, stamps) of
+     * all sessions. Runs under [evictionLock] so the [SessionState.project]
+     * reads cannot observe a torn swap from a concurrent [update] (the field
+     * is plain and only written under the lock).
+     */
+    fun list(): List<JsonObject> = synchronized(evictionLock) {
+        sessions.values
+            .sortedBy { it.createdAtMs }
+            .map { session ->
+                jsonobj {
+                    put("session_id", session.id)
+                    put("project_id", session.project.id)
+                    put("name", session.project.name)
+                    put("width", session.project.width)
+                    put("height", session.project.height)
+                    put("frames", session.project.frameCount)
+                    put("layers", session.project.layerCount)
+                    put("palette_id", session.project.palette.id)
+                    put("created_at_ms", session.createdAtMs)
+                    put("last_used_ms", session.lastUsedMs)
+                }
             }
-        }
+    }
 
     /** Removes least-recently-used sessions until the cap is satisfied
      *  again. Callers hold [evictionLock]; callbacks fire only for entries

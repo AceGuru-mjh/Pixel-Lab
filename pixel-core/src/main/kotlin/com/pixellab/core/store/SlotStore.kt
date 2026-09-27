@@ -28,13 +28,18 @@ import java.io.IOException
  *
  * ## Semantics
  *
- *  * A slot name is an address, not a history: saving the same name again
- *    overwrites the slot (it may point at a different project id).
+ *  * A slot is a named pointer to an **immutable snapshot**: every save
+ *    materializes the project under a fresh snapshot id (`<id>.s<time>`)
+ *    and points the slot at it, so "save draft" -> edit -> "save final"
+ *    under the same project leaves BOTH versions on disk. The historical
+ *    same-id overwrite silently destroyed the draft (loading the slot
+ *    later returned the final state with no warning).
  *  * [list] tolerates corrupt or foreign files: unreadable slots are
  *    reported with `readable: false` instead of poisoning the listing.
  *  * [load] goes through [ProjectStore.load] and therefore benefits from
  *    its LRU cache — a save-then-load round trip never touches the disk
- *    for pixels twice.
+ *    for pixels twice. Superseded snapshots stay in the store until
+ *    removed with [ProjectStore.delete] (the MCP `project_delete` tool).
  *
  * ## Thread-safety
  *
@@ -86,18 +91,23 @@ class SlotStore(private val root: File) {
     fun save(name: String, project: SpriteProject, sessionId: String, projects: ProjectStore): SlotSummary {
         val clean = requireName(name)
         val summary = synchronized(lock) {
-            projects.save(project)
+            // Snapshot semantics: a fresh project id per save makes every
+            // slot point at immutable bytes. Same-id saves used to overwrite
+            // the shared project document, so an older slot silently
+            // resurrected the NEWEST content instead of the state it saved.
+            val snapshot = project.copy(id = snapshotId(project.id))
+            projects.save(snapshot)
             val document = buildString {
                 append("{")
                 append("\"schema\":1,")
                 append("\"name\":").append(jsonString(clean)).append(',')
-                append("\"project_id\":").append(jsonString(project.id)).append(',')
-                append("\"project_name\":").append(jsonString(project.name)).append(',')
-                append("\"width\":").append(project.width).append(',')
-                append("\"height\":").append(project.height).append(',')
-                append("\"frames\":").append(project.frameCount).append(',')
-                append("\"layers\":").append(project.layerCount).append(',')
-                append("\"palette_id\":").append(jsonString(project.palette.id)).append(',')
+                append("\"project_id\":").append(jsonString(snapshot.id)).append(',')
+                append("\"project_name\":").append(jsonString(snapshot.name)).append(',')
+                append("\"width\":").append(snapshot.width).append(',')
+                append("\"height\":").append(snapshot.height).append(',')
+                append("\"frames\":").append(snapshot.frameCount).append(',')
+                append("\"layers\":").append(snapshot.layerCount).append(',')
+                append("\"palette_id\":").append(jsonString(snapshot.palette.id)).append(',')
                 append("\"saved_by_session\":").append(jsonString(sessionId)).append(',')
                 append("\"saved_at_ms\":").append(System.currentTimeMillis())
                 append("}")
@@ -105,13 +115,13 @@ class SlotStore(private val root: File) {
             writeAtomic(slotFile(clean), document.toByteArray(Charsets.UTF_8))
             SlotSummary(
                 name = clean,
-                projectId = project.id,
-                projectName = project.name,
-                width = project.width,
-                height = project.height,
-                frames = project.frameCount,
-                layers = project.layerCount,
-                paletteId = project.palette.id,
+                projectId = snapshot.id,
+                projectName = snapshot.name,
+                width = snapshot.width,
+                height = snapshot.height,
+                frames = snapshot.frameCount,
+                layers = snapshot.layerCount,
+                paletteId = snapshot.palette.id,
                 savedBySession = sessionId,
                 savedAtMs = System.currentTimeMillis(),
                 readable = true,
@@ -345,6 +355,10 @@ class SlotStore(private val root: File) {
      * restricted to `[A-Za-z0-9._-]` (the same alphabet ProjectStore
      * sanitizes file names to, so the slot name *is* the file stem).
      */
+    /** Fresh snapshot id derived from the source project's id. */
+    private fun snapshotId(sourceId: String): String =
+        "$sourceId.s" + java.lang.Long.toString(System.nanoTime(), 36)
+
     private fun requireName(name: String): String {
         val trimmed = name.trim()
         require(trimmed.isNotBlank()) { "slot name must not be blank" }

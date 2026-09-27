@@ -94,12 +94,12 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #49 | **Agent 工效学（V6）**：draw_batch 验证先行批量绘制（64 op 单往返）+ 命名检查点（CheckpointTracker 深度锚/整批回滚）+ 会话持久化（SlotStore 命名槽 + ProjectStore）+ canvas_checksum FNV 指纹 + project_export_json 反向通道（总 **174** 工具）+ 45 项单测 | +2,900 行 |
 | PR #50 | **技能与宿主集成包**：3 个可导入 Android-Guru-Agent 的方法论技能（精灵设计/调色板教练/动画工作流）+ host-integration/ 30 秒接入物料（mcp-servers 配置片段）+ 样例 App MCP 服务器面板（固定端口 8901/8902 + 持久化接线 + 画廊入口） | +640 行 |
 | PR #51 | **审计加固轮**：传输/存储 12 项缺陷修复（chunked Int 溢出 DoS、WS 握手 RFC 严格化 + 连接上限 + close 码校验、SSE 注册 TOCTOU、会话存储并发语义、start 部分失败回滚、原子写窗口、meta 转义）+ draw_batch 契约修正 + CI 扩至 pixel-mcp 测试门 + 17 项回归测试（总 313） | +1,160 行 |
-| PR #52 | **架构闭环补齐**：11 个新工具（export data_b64 / io_import_image / draw_text / sketch_draw / palette_set_colors+import / frame+layer_set_active / convert 落笔 / project_delete / checksum project 模式）+ 20 项契约修复（palette 域统一 21 板、checkpoint 错误形状、全参数上限、SKETCH 无损往返、文档真实性）+ CelStamp 合成器 + SketchParser | +1,564 行 |
+| PR #52 | **架构闭环补齐**：8 个新工具（io_import_image / draw_text / sketch_draw / palette_set_colors / palette_import / frame_set_active / layer_set_active / project_delete）+ 3 项能力扩展（五个导出工具 data_b64 内联 / convert_image 会话落笔 / canvas_checksum 项目模式）+ 20 项契约修复（palette 域统一 21 板、checkpoint 错误形状、全参数上限、SKETCH 无损往返、文档真实性）+ CelStamp 合成器 + SketchParser | +1,564 行 |
 | PR #53 | **UI/UX 修复轮**：G 滑杆掩码、预览 0 尺寸、nudge 键名、快捷键冒泡（文本输入不再被劫持）、compact 滚动、图层锁/对称执行、旋转丢稿（P0）、MCP 启动容错、text: 真实落画布、主线程 IO、导出反馈 | +497 行 |
 | PR #54 | **引擎正确性**：JNI 输入缓冲别名污染（mode-0 回写改写调用方不可变帧数组）、removeLayer 单趟构造（含内容图层必抛 IAE）、isModified 状态锚、checkpoint 双锚（分叉/驱逐诚实失败）、slot 快照版本化、载入边界清历史、撤销字节预算、并发安全 | +753 行 |
 | PR #55 | **IO 解码器加固**：统一导入预算（边 16384/帧 16.7M/总量 33.5M 像素）封死 PNG/GIF/BMP/QOI/Aseprite 全部「小文件→数 GB 分配」路径 + Long 域算术 + 链式 cel 深度上限 + V4/V5 截断守卫 | +367 行 |
 | PR #56 | **传输层加固**：Bearer token 准入（401/415/411——封死 loopback 共享与 text/plain CSRF）、8MB 增量请求体、JSON 200K 节点预算、SSE 有界队列写（慢客户端断开而非挂死服务器）、专用 accept 线程 + 128 连接上限、WS 握手期上限、RFC 9112 严格化（行内 CR 走私/trailer 上限/请求行校验） | +621 行 |
-| **合计** | | **60,300+ 行**，**185 个 MCP 工具**，**374 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
+| **合计** | | **58,900+ 行**（Kotlin 56,800+ + C++ 2,142+），**182 个 MCP 工具**，**368 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

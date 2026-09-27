@@ -71,11 +71,17 @@ private const val StoreDirName: String = "pixel-lab"
  * Activity-scoped lifecycle: the server runs while this screen exists and
  * stops in [onDestroy]. That is the *sample* lifecycle — production hosts
  * should own the server from a foreground service (see
- * docs/HOST-INTEGRATION.md) so it survives navigation.
+ * docs/HOST-INTEGRATION.md) so it survives navigation. A failed boot (a
+ * port already held by another process, for instance) does not crash the
+ * activity: the failure message is kept as Compose state and rendered by
+ * the panel in the theme's error color.
  */
 class McpServerActivity : ComponentActivity() {
 
     private var server: PixelMcpServer? = null
+
+    /** Last start failure message, or null; snapshot state so the panel re-renders. */
+    private var startError by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,6 +93,7 @@ class McpServerActivity : ComponentActivity() {
                         serverAccessor = { server },
                         onStart = { start() },
                         onStop = { stop() },
+                        startError = startError,
                     )
                 }
             }
@@ -100,11 +107,21 @@ class McpServerActivity : ComponentActivity() {
 
     private fun start() {
         if (server != null) return
+        startError = null
         val instance = PixelMcpServer(
             persistenceRoot = File(filesDir, StoreDirName),
         )
-        instance.start(ServerPort, WebsocketPort)
-        server = instance
+        try {
+            instance.start(ServerPort, WebsocketPort)
+            server = instance
+        } catch (error: Throwable) {
+            // A port already bound (or a transport that failed mid-boot)
+            // must surface in the UI instead of killing the activity. The
+            // handle is only published on success, so the panel's running
+            // state stays truthful; a partially-booted instance tears
+            // itself down inside PixelMcpServer.start's rollback.
+            startError = error.message ?: error.javaClass.simpleName
+        }
     }
 
     private fun stop() {
@@ -118,7 +135,14 @@ class McpServerActivity : ComponentActivity() {
  *
  * Pure presentation: the activity owns the server instance; the panel
  * reads state through [serverAccessor] (the running handle or null) and
- * calls [onStart]/[onStop].
+ * the last [startError] (rendered in the theme error color in place of
+ * the "Running" detail rows), and calls [onStart]/[onStop].
+ *
+ * @param persistenceRoot root the slot store lists sessions from.
+ * @param serverAccessor reads the activity-owned running handle.
+ * @param onStart boots the server (failures land in [startError]).
+ * @param onStop stops a running server.
+ * @param startError last boot failure message, or null.
  */
 @Composable
 fun McpServerPanel(
@@ -126,13 +150,15 @@ fun McpServerPanel(
     serverAccessor: () -> PixelMcpServer?,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    startError: String? = null,
 ) {
     val clipboard = LocalClipboardManager.current
     val scroll = rememberScrollState()
     var running by remember { mutableStateOf(serverAccessor() != null) }
 
     // The toggle drives the activity-owned server; `running` re-reads the
-    // real handle so the status card never shows a stale snapshot.
+    // real handle — which start() only publishes on success — so the
+    // status card never shows a stale snapshot after a failed boot.
     fun flip(wantRunning: Boolean) {
         if (wantRunning) onStart() else onStop()
         running = serverAccessor() != null
@@ -174,7 +200,13 @@ fun McpServerPanel(
                         contentDescription = if (running) "Stop server" else "Start server",
                     )
                 }
-                if (running) {
+                if (startError != null) {
+                    Text(
+                        "Start failed: $startError",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else if (running) {
                     StatusRow("HTTP (JSON-RPC)", "127.0.0.1:$ServerPort · POST /mcp · GET /sse")
                     StatusRow("WebSocket", "127.0.0.1:$WebsocketPort · RFC 6455")
                     StatusRow("Persistence", persistenceRoot.absolutePath)

@@ -12,11 +12,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- configChanges: the editor (EditorScreen via AppRoot) and the MCP
+             panel keep their Compose state across rotation instead of being
+             recreated with a re-read from disk. -->
         <activity
             android:name=".EditorActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false" />
         <activity
             android:name=".McpServerActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false" />
     </application>
 </manifest>

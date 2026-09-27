@@ -1,5 +1,6 @@
 package com.pixellab.app
 
+import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -18,25 +20,36 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pixellab.core.model.SpriteProject
 import com.pixellab.core.store.ProjectStore
 import com.pixellab.ui.PixelEditorScaffold
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Outer padding of the editor screen. */
 private val ScreenPadding = 8.dp
 
 /** Spacing between the top bar actions. */
 private val BarSpacing = 8.dp
+
+/** Log tag of the ON_STOP draft saves. */
+private const val DraftSaveTag = "EditorScreen"
 
 /**
  * The file-backed editing screen of the sample app: a [PixelEditorScaffold]
@@ -51,6 +64,13 @@ private val BarSpacing = 8.dp
  *    flag. The scaffold's *internal* [com.pixellab.ui.EditorSession]
  *    (undo/redo/coalescing) is owned by the scaffold itself — this screen
  *    never touches it.
+ *  * **State survival**: the host activity pins `android:configChanges`
+ *    (see the manifest), so rotation keeps this whole composition —
+ *    document included — alive; the dirty flag is additionally
+ *    [rememberSaveable] for the recreations we do not opt out of (dark
+ *    mode, locale, process death). Backgrounding while dirty persists the
+ *    document on the activity's ON_STOP (the [DisposableEffect] below), so
+ *    a later process death cannot lose edits.
  *  * **Saving** is explicit: the top-bar button (and the scaffold's own
  *    Ctrl+S hook, wired through `onSave`) call [ProjectStore.save] with the
  *    current project and clear the flag. No auto-save on every stroke —
@@ -62,8 +82,10 @@ private val BarSpacing = 8.dp
  * ## Error handling
  *
  * Load failures (corrupt document, missing directory) surface as a
- * centered message with a back action instead of a crash; save failures
- * (read-only volume) surface as a snackbar on the screen's own host.
+ * centered message with a back action instead of a crash — the load itself
+ * runs off the main thread, with a progress indicator in the meantime.
+ * Save failures (read-only volume) surface as a snackbar on the screen's
+ * own host.
  *
  * @param projectStore the persistence root shared with [GalleryScreen].
  * @param projectId the id of the directory under `projects/`.
@@ -77,17 +99,66 @@ fun EditorScreen(
 ) {
     var loadError by remember(projectId) { mutableStateOf<String?>(null) }
     var project by remember(projectId) { mutableStateOf<SpriteProject?>(null) }
-    var dirty by remember(projectId) { mutableStateOf(false) }
+
+    // Saveable rather than plain remember: rotation is already covered by
+    // the manifest's configChanges (the composition survives), and for the
+    // recreations we do not opt out of (dark mode, locale, process death)
+    // the flag travels with the Bundle, matching the re-loaded document.
+    var dirty by rememberSaveable(projectId) { mutableStateOf(false) }
     var confirmLeave by remember(projectId) { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    if (project == null && loadError == null) {
+    // Disk IO stays off the main thread; the screen shows a progress
+    // indicator until the document arrives.
+    LaunchedEffect(projectId) {
         try {
-            project = projectStore.load(projectId)
+            project = withContext(Dispatchers.IO) { projectStore.load(projectId) }
         } catch (error: Exception) {
             loadError = error.message ?: "cannot load project '$projectId'"
         }
+    }
+
+    // ---- unsaved-work safety net -------------------------------------------
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Persist dirty documents when the activity stops: ON_STOP always
+    // precedes both destroy and the process death of a backgrounded
+    // activity, so the in-memory document cannot vanish with it — the next
+    // visit re-loads the saved bytes. Two deliberate trade-offs:
+    //
+    //  * The spec's ProcessLifecycleOwner needs the `lifecycle-process`
+    //    artifact — a new dependency, out of bounds for this fix. Observing
+    //    the activity's own lifecycle covers every state this screen can be
+    //    in (it fills its host activity).
+    //  * The save runs on a detached worker thread, not a coroutine: during
+    //    teardown no structured scope of this composition is guaranteed to
+    //    run the write to completion, and racing a scope-launched save could
+    //    reorder two documents onto the same file (which is why the explicit
+    //    save button below stays synchronous). Best-effort beats a dropped
+    //    save; failures are logged — the explicit Save button still reports
+    //    them through the snackbar.
+    //
+    // In-app "Leave without saving" stays honest: it navigates without
+    // stopping the activity, so this observer never fires for it.
+    DisposableEffect(lifecycleOwner, projectId) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                val current = project
+                if (dirty && current != null) {
+                    Thread {
+                        try {
+                            projectStore.save(current)
+                        } catch (error: Exception) {
+                            Log.w(DraftSaveTag, "draft save failed for ${current.id}", error)
+                        }
+                    }.start()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     /** Persists the current project and clears the dirty flag. */
@@ -162,10 +233,12 @@ fun EditorScreen(
                         )
                     }
 
-                    else -> Text(
-                        text = "Loading…",
-                        modifier = Modifier.padding(ScreenPadding),
-                    )
+                    else -> Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
                 SnackbarHost(hostState = snackbarHostState)
             }

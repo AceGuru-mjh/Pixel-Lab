@@ -9,10 +9,12 @@ import com.pixellab.core.convert.QuantizeAlgorithm
 import com.pixellab.core.convert.RefineInstructions
 import com.pixellab.core.export.SpritesheetLayout
 import com.pixellab.core.model.Palette
+import com.pixellab.core.model.PaletteSource
 import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.PixelPoint
 import com.pixellab.core.model.SpriteProject
 import com.pixellab.core.palette.BuiltInPalettes
+import com.pixellab.core.palette.PaletteLibrary
 import com.pixellab.core.template.Font5x7
 import com.pixellab.core.template.Font8x8
 import com.pixellab.core.template.PixelFont
@@ -26,9 +28,22 @@ import com.pixellab.mcp.json.jsonarray
 import com.pixellab.mcp.json.jsonobj
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.Base64
 
 /** Upper bound for a canvas edge accepted from MCP requests (entry guard). */
 private const val MAX_CANVAS_EDGE: Int = 8192
+
+/** Upper bound of one binary payload inlined as base64 by export tools (2 MB). */
+private const val MAX_INLINE_BYTES: Int = 2 * 1024 * 1024
+
+/** Upper bound for point lists accepted by the draw_* tools (use draw_batch beyond). */
+private const val MAX_POINTS_PARAM: Int = 4096
+
+/** Upper bound for raw pixel arrays accepted as tool parameters. */
+private const val MAX_PIXEL_INPUT: Int = 4_194_304
+
+/** Number of hex swatches echoed by palette summaries before truncation. */
+private const val PALETTE_ECHO_LIMIT: Int = 16
 
 /**
  * One MCP tool: snake_case [name], one-line [description], grouping [category]
@@ -51,7 +66,7 @@ class McpToolException(message: String, val code: Int = JsonRpc.INVALID_PARAMS) 
 /**
  * Registry and dispatcher of every pixel-mcp tool — the full §8 contract list:
  * `canvas_*`, `draw_*`, `layer_*`, `frame_*`, `palette_*`, `convert_*`,
- * `anim_*`, `text_*`, `template_*`, `export_*` and `project_*` (55 tools).
+ * `anim_*`, `text_*`, `template_*`, `export_*` and `project_*` (58 tools).
  *
  * Handlers are defensive: missing or mistyped parameters raise
  * [IllegalArgumentException], which [execute] surfaces as
@@ -168,19 +183,27 @@ class McpToolRegistry(private val lab: PixelLab) {
     /** `"#AARRGGBB"` rendering of [argb]. */
     private fun hexArgb(argb: Int): String = "#" + "%08x".format(argb)
 
-    /** Optional built-in palette id parameter; null when absent. */
+    /** Optional built-in/library palette id parameter; null when absent. */
     private fun paletteParam(params: JsonObject, key: String = "palette_id"): Palette? {
         val raw = params.raw(key) ?: return null
         if (raw is JsonNull) return null
         val id = (raw as? JsonString)?.value
             ?: throw IllegalArgumentException("parameter '$key' must be a palette id string")
-        return BuiltInPalettes.byId(id)
-            ?: throw IllegalArgumentException("unknown palette '$id' (see palette_list)")
+        // Same domain as the v2 `optionalPaletteParam`: the extended
+        // library first, the built-ins second, so every tier resolves
+        // palette ids identically.
+        return PaletteLibrary.byId(id)
+            ?: BuiltInPalettes.byId(id)
+            ?: throw IllegalArgumentException("unknown palette '$id' (see palette_library_list)")
     }
 
-    /** Point list parameter: `[{"x": 1, "y": 2}, ...]`. */
+    /** Point list parameter: `[{"x": 1, "y": 2}, ...]` (max 4096 entries —
+     * bulk drawing belongs to `draw_batch`). */
     private fun pointsParam(params: JsonObject, key: String = "points"): List<PixelPoint> {
         val array = params.array(key)
+        require(array.size <= MAX_POINTS_PARAM) {
+            "'$key' has ${array.size} entries (max $MAX_POINTS_PARAM); use draw_batch for bulk drawing"
+        }
         val out = ArrayList<PixelPoint>(array.size)
         for (item in array) {
             val entry = item as? JsonObject
@@ -188,6 +211,31 @@ class McpToolRegistry(private val lab: PixelLab) {
             out.add(PixelPoint(entry.int("x"), entry.int("y")))
         }
         return out
+    }
+
+    /** Mixed color list parameter: ARGB integers and/or `"#RRGGBB"` /
+     * `"#AARRGGBB"` strings, deduplicated preserving first-appearance
+     * order (max 256 entries). */
+    private fun colorsParam(params: JsonObject, key: String = "colors"): IntArray {
+        val array = params.array(key)
+        require(array.size in 1..256) { "'$key' needs 1..256 colors (was ${array.size})" }
+        val seen = LinkedHashSet<Int>(array.size)
+        for ((index, item) in array.items.withIndex()) {
+            val color = when (item) {
+                is JsonString -> parseHexColor(item.value)
+                is JsonNumber -> {
+                    if (item.value != Math.floor(item.value) ||
+                        item.value < Int.MIN_VALUE.toDouble() || item.value > Int.MAX_VALUE.toDouble()
+                    ) {
+                        throw IllegalArgumentException("'$key[$index]' must be an ARGB integer")
+                    }
+                    item.value.toInt()
+                }
+                else -> throw IllegalArgumentException("'$key[$index]' must be '#RRGGBB' or an ARGB integer")
+            }
+            seen.add(color)
+        }
+        return seen.toIntArray()
     }
 
     /** Quantize algorithm by wire name; defaults to median cut. */
@@ -221,12 +269,15 @@ class McpToolRegistry(private val lab: PixelLab) {
         else -> throw IllegalArgumentException("font must be '5x7' or '8x8'")
     }
 
-    /** Pixel data parameter: `[argb, argb, ...]` row-major plus `width`/`height`. */
+    /** Pixel data parameter: `[argb, argb, ...]` row-major plus `width`/`height` (max 4 Mi pixels). */
     private fun imageParam(params: JsonObject): ImageData? {
         val raw = params.raw("pixels") ?: return null
         if (raw is JsonNull) return null
         val array = raw as? JsonArray
             ?: throw IllegalArgumentException("parameter 'pixels' must be an array of ARGB integers")
+        require(array.size <= MAX_PIXEL_INPUT) {
+            "pixel input has ${array.size} pixels, beyond the $MAX_PIXEL_INPUT cap — downscale first"
+        }
         val pixels = IntArray(array.size)
         for ((index, item) in array.items.withIndex()) {
             val number = item as? JsonNumber
@@ -279,7 +330,16 @@ class McpToolRegistry(private val lab: PixelLab) {
     }
 
     private fun intElement(element: JsonElement): Int = when (element) {
-        is JsonNumber -> element.value.toInt()
+        is JsonNumber -> {
+            // Same 32-bit domain check as JsonObject.int: a 1e20 or
+            // fractional entry must fail instead of silently clamping.
+            if (element.value != Math.floor(element.value) ||
+                element.value < Int.MIN_VALUE.toDouble() || element.value > Int.MAX_VALUE.toDouble()
+            ) {
+                throw IllegalArgumentException("track range entries must be 32-bit integers")
+            }
+            element.value.toInt()
+        }
         else -> throw IllegalArgumentException("track range entries must be integers")
     }
 
@@ -293,6 +353,21 @@ class McpToolRegistry(private val lab: PixelLab) {
     private fun opaquePixels(frame: PixelFrame): Int = frame.pixels.count { it != 0 }
 
     // ---- result helpers ---------------------------------------------------
+
+    /** Inline bytes block shared by the v1 export tools: `data_b64` up to
+     * [MAX_INLINE_BYTES], otherwise a note pointing at the durable
+     * alternatives (matches the v3 `binaryEnvelope` discipline). */
+    private fun inlineBytes(bytes: ByteArray): JsonObject = jsonobj {
+        if (bytes.size <= MAX_INLINE_BYTES) {
+            put("data_b64", Base64.getEncoder().encodeToString(bytes))
+        } else {
+            put(
+                "note",
+                "output too large for inline return (${bytes.size} bytes); " +
+                    "use session_save or io_export_* with smaller scale",
+            )
+        }
+    }
 
     /** Standard project summary echoed after mutating operations. */
     private fun projectSummary(session: PixelSessionStore.SessionState, project: SpriteProject): JsonObject =
@@ -500,12 +575,14 @@ class McpToolRegistry(private val lab: PixelLab) {
             }
         }
 
-        add("draw_circle", "Draws a midpoint circle at (cx, cy) with radius r, filled or outlined.", "draw",
+        add("draw_circle", "Draws a midpoint circle at (cx, cy) with radius r (0..65536), filled or outlined.", "draw",
             "session_id" to "string", "cx" to "integer", "cy" to "integer", "radius" to "integer",
             "color" to "string", "filled" to "boolean",
             required = listOf("session_id", "cx", "cy", "radius", "color")) { params, store ->
+            val radius = params.int("radius")
+            require(radius in 0..65536) { "radius must be in [0, 65536] (was $radius)" }
             mutate(params, store) {
-                lab.engine.drawCircle(it, params.int("cx"), params.int("cy"), params.int("radius"), colorParam(params, "color"), params.opt("filled", false))
+                lab.engine.drawCircle(it, params.int("cx"), params.int("cy"), radius, colorParam(params, "color"), params.opt("filled", false))
             }
         }
 
@@ -607,6 +684,18 @@ class McpToolRegistry(private val lab: PixelLab) {
             }
         }
 
+        add("layer_set_active", "Sets the layer that receives drawing operations (must be an existing layer id, see layer_list). Draw tools without an explicit layer always target the active layer.", "layer",
+            "session_id" to "string", "layer_id" to "integer",
+            required = listOf("session_id", "layer_id")) { params, store ->
+            val session = sessionOf(params, store)
+            val layerId = params.int("layer_id")
+            require(session.project.layers.any { it.id == layerId }) {
+                "layer_id $layerId not in layer stack (see layer_list: " +
+                    session.project.layers.joinToString(", ") { "${it.id} '${it.name}'" } + ")"
+            }
+            mutate(params, store) { it.withActiveLayer(layerId) }
+        }
+
         // ---- frame ----
 
         add("frame_add", "Adds a frame after after_index (default: last) sharing the source cels.", "frame",
@@ -646,6 +735,18 @@ class McpToolRegistry(private val lab: PixelLab) {
             }
         }
 
+        add("frame_set_active", "Sets the frame being edited (index 0..frames-1); every draw call without an explicit frame_index targets the active frame — call this before draw_batch or other active-frame tools.", "frame",
+            "session_id" to "string", "frame_index" to "integer",
+            required = listOf("session_id", "frame_index")) { params, store ->
+            val session = sessionOf(params, store)
+            val frameIndex = params.int("frame_index")
+            require(frameIndex in 0 until session.project.frameCount) {
+                "frame_index $frameIndex outside 0..${session.project.frameCount - 1} " +
+                    "(${session.project.frameCount} frames)"
+            }
+            mutate(params, store) { it.withActiveFrameIndex(frameIndex) }
+        }
+
         // ---- palette ----
 
         add("palette_list", "Lists every built-in palette with its hex colors.", "palette") { _, _ ->
@@ -669,6 +770,34 @@ class McpToolRegistry(private val lab: PixelLab) {
                 .build()
         }
 
+        add("palette_set_colors", "Replaces the session's active palette with an explicit color list (ARGB integers and/or '#RRGGBB' strings, deduplicated in order, max 256). Existing pixels are not remapped.", "palette",
+            "session_id" to "string", "colors" to "array", "palette_id" to "string", "name" to "string",
+            required = listOf("session_id", "colors")) { params, store ->
+            val colors = colorsParam(params)
+            val palette = Palette(
+                id = params.opt("palette_id", "custom"),
+                name = params.opt("name", "Custom"),
+                colors = colors,
+                source = PaletteSource.CUSTOM,
+            )
+            mutate(params, store) { it.withPalette(palette) }.toMutable()
+                .put(
+                    "palette",
+                    jsonobj {
+                        put("palette_id", palette.id)
+                        put("name", palette.name)
+                        put("color_count", palette.size)
+                        put("colors", jsonarray {
+                            for (hex in palette.colors.map { hexArgb(it) }.take(PALETTE_ECHO_LIMIT)) {
+                                add(JsonString(hex))
+                            }
+                        })
+                        put("truncated", palette.size > PALETTE_ECHO_LIMIT)
+                    },
+                )
+                .build()
+        }
+
         add("palette_closest_color", "Finds the palette color closest (CIELAB) to a given color.", "palette",
             "color" to "string", "session_id" to "string", required = listOf("color")) { params, store ->
             val color = colorParam(params, "color")
@@ -685,11 +814,11 @@ class McpToolRegistry(private val lab: PixelLab) {
         // ---- convert ----
 
         add("convert_image",
-            "Converts a raw pixel array (width x height ARGB ints) into pixel art; without pixels, returns usage instructions.",
+            "Converts a raw pixel array (width x height ARGB ints) into pixel art; without pixels, returns usage instructions. With session_id the converted pixels are stamped onto that session's active cel (top-left, out-of-canvas pixels clipped and reported) — pass commit=false to convert without writing.",
             "convert",
             "pixels" to "array", "width" to "integer", "height" to "integer", "target_width" to "integer",
             "target_height" to "integer", "color_count" to "integer", "palette_id" to "string",
-            "algorithm" to "string", "dither" to "string") { params, _ ->
+            "algorithm" to "string", "dither" to "string", "session_id" to "string", "commit" to "boolean") { params, store ->
             val image = imageParam(params) ?: return@add jsonobj {
                 put(
                     "instructions",
@@ -717,6 +846,18 @@ class McpToolRegistry(private val lab: PixelLab) {
                     dither = ditherAlgorithm(params, default = "floyd_steinberg"),
                 ),
             ).unwrap("convert_image")
+            val sessionRequested = params.raw("session_id")?.let { it !is JsonNull } == true
+            val session = if (sessionRequested) sessionOf(params, store) else null
+            val stamp = if (session != null && params.opt("commit", true)) {
+                CelStamp.stamp(session.project, result.frame, 0, 0)
+            } else {
+                null
+            }
+            var committedProject: SpriteProject? = null
+            if (stamp != null && session != null) {
+                committedProject = lab.engine.applyFrame(session.project, stamp.cel)
+                store.update(session.id, committedProject)
+            }
             jsonobj {
                 put("width", result.width)
                 put("height", result.height)
@@ -724,7 +865,19 @@ class McpToolRegistry(private val lab: PixelLab) {
                 put("transparent_pixels", result.transparentPixels)
                 put("palette_id", result.palette.id)
                 put("palette_color_count", result.palette.size)
-                put("note", "output pixels are held in memory only; pass them back with canvas-level tools if needed")
+                if (stamp != null && session != null && committedProject != null) {
+                    put("session_id", session.id)
+                    put("committed", true)
+                    put("placed_pixels", stamp.placed)
+                    put("clipped_pixels", stamp.clipped)
+                    putAllSummary(projectSummary(session, committedProject))
+                } else {
+                    if (sessionRequested) put("committed", false)
+                    put(
+                        "note",
+                        "output pixels are held in memory only; pass them back with canvas-level tools if needed",
+                    )
+                }
             }
         }
 
@@ -776,7 +929,7 @@ class McpToolRegistry(private val lab: PixelLab) {
             mutate(params, store) { lab.animation.setFps(it, params.int("fps")) }
         }
 
-        add("anim_tag", "Sets a named frame-span tag (or removes it with remove=true).", "anim",
+        add("anim_tag", "Sets a named frame-span tag (or removes it with remove=true). start_frame/end_frame are required unless remove=true — the simplified schema has no conditional-required mechanism, so they stay optional here.", "anim",
             "session_id" to "string", "name" to "string", "start_frame" to "integer", "end_frame" to "integer",
             "remove" to "boolean", required = listOf("session_id", "name")) { params, store ->
             val session = sessionOf(params, store)
@@ -821,12 +974,16 @@ class McpToolRegistry(private val lab: PixelLab) {
         add("text_generate", "Renders text with a bitmap font and reports its size and lit pixel count.", "text",
             "text" to "string", "color" to "string", "font" to "string", "spacing" to "integer", "scale" to "integer",
             required = listOf("text")) { params, _ ->
+            val spacing = params.opt("spacing", 1)
+            val scale = params.opt("scale", 1)
+            require(spacing in 0..64) { "'spacing' must be in [0, 64] (was $spacing)" }
+            require(scale in 1..16) { "'scale' must be in [1, 16] (was $scale)" }
             val frame = lab.template.generateText(
                 text = params.string("text"),
                 color = if (params.has("color")) colorParam(params, "color") else 0xFFFFFFFF.toInt(),
                 font = fontParam(params),
-                spacing = params.opt("spacing", 1),
-                scale = params.opt("scale", 1),
+                spacing = spacing,
+                scale = scale,
             )
             jsonobj {
                 put("width", frame.width)
@@ -878,7 +1035,7 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         // ---- export ----
 
-        add("export_png", "Exports one composited frame as PNG; returns the byte count.", "export",
+        add("export_png", "Exports one composited frame as PNG; returns the byte count plus data_b64 (inline up to 2 MB).", "export",
             "session_id" to "string", "frame_index" to "integer", "scale" to "integer",
             required = listOf("session_id")) { params, store ->
             val session = sessionOf(params, store)
@@ -893,10 +1050,11 @@ class McpToolRegistry(private val lab: PixelLab) {
                 put("frame_index", frameIndex)
                 put("width", project.width * scale)
                 put("height", project.height * scale)
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
-        add("export_spritesheet", "Exports all frames as a PNG spritesheet; returns the byte count.", "export",
+        add("export_spritesheet", "Exports all frames as a PNG spritesheet; returns the byte count plus data_b64 (inline up to 2 MB).", "export",
             "session_id" to "string", "scale" to "integer", "layout" to "string", "columns" to "integer",
             "margin" to "integer", required = listOf("session_id")) { params, store ->
             val session = sessionOf(params, store)
@@ -917,10 +1075,11 @@ class McpToolRegistry(private val lab: PixelLab) {
                 put("layout", layoutName)
                 put("byte_count", bytes.size)
                 put("frames", project.frameCount)
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
-        add("export_gif", "Exports the animation as GIF89a; returns the byte count.", "export",
+        add("export_gif", "Exports the animation as GIF89a; returns the byte count plus data_b64 (inline up to 2 MB).", "export",
             "session_id" to "string", "loop_count" to "integer", "dither" to "string",
             required = listOf("session_id")) { params, store ->
             val session = sessionOf(params, store)
@@ -934,10 +1093,11 @@ class McpToolRegistry(private val lab: PixelLab) {
                 put("byte_count", bytes.size)
                 put("frames", project.frameCount)
                 put("fps", project.fps)
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
-        add("export_apng", "Exports the animation as APNG; returns the byte count.", "export",
+        add("export_apng", "Exports the animation as APNG; returns the byte count plus data_b64 (inline up to 2 MB).", "export",
             "session_id" to "string", "loop_count" to "integer", required = listOf("session_id")) { params, store ->
             val session = sessionOf(params, store)
             val project = session.project
@@ -947,11 +1107,12 @@ class McpToolRegistry(private val lab: PixelLab) {
                 put("format", "apng")
                 put("byte_count", bytes.size)
                 put("frames", project.frameCount)
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
         add("export_codex_pet",
-            "Exports the Codex companion-pet ZIP (spritesheet.png + pet.json); returns the byte count and track summary.",
+            "Exports the Codex companion-pet ZIP (spritesheet.png + pet.json); returns the byte count, track summary and data_b64 (inline up to 2 MB).",
             "export", "session_id" to "string", "pet_name" to "string", "tracks" to "object",
             required = listOf("session_id")) { params, store ->
             val session = sessionOf(params, store)
@@ -979,6 +1140,7 @@ class McpToolRegistry(private val lab: PixelLab) {
                         }
                     },
                 )
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 

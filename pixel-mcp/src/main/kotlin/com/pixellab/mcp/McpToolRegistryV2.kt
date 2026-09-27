@@ -15,6 +15,8 @@ import com.pixellab.core.palette.PaletteLibrary
 import com.pixellab.core.project.ProjectCodec
 import com.pixellab.core.template.Font5x7
 import com.pixellab.core.template.Font8x8
+import com.pixellab.core.template.TextOptions
+import com.pixellab.core.template.TextStyler
 import com.pixellab.core.tools.Anchor
 import com.pixellab.core.tools.BlendMode
 import com.pixellab.core.tools.BrushShape
@@ -42,10 +44,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Second-tier MCP tool registry for Pixel Lab: 35 additional tools covering
+ * Second-tier MCP tool registry for Pixel Lab: 36 additional tools covering
  * advanced shapes, brushes, selections, cel transforms, blend modes,
- * symmetry, animation effects, the extended palette library, styled text,
- * templates, project (de)serialization and Aseprite metadata export.
+ * symmetry, animation effects, the extended palette library, styled text
+ * (including the session-stamping draw_text), templates, project
+ * (de)serialization and Aseprite metadata export.
  *
  * The registry reuses the [McpTool] data class, the [PixelSessionStore]
  * session model and the defensive style of [McpToolRegistry] (v1): handlers
@@ -209,9 +212,13 @@ object McpToolRegistryV2 {
     /** `"#AARRGGBB"` rendering of [argb]. */
     private fun hexArgb(argb: Int): String = "#" + "%08x".format(argb)
 
-    /** Point list parameter: `[{"x": 1, "y": 2}, ...]`. */
+    /** Point list parameter: `[{"x": 1, "y": 2}, ...]` (max 4096 entries —
+     * bulk drawing belongs to `draw_batch`). */
     private fun pointsParam(params: JsonObject, key: String = "points"): List<PixelPoint> {
         val array = params.array(key)
+        require(array.size <= 4096) {
+            "'$key' has ${array.size} entries (max 4096); use draw_batch for bulk drawing"
+        }
         val out = ArrayList<PixelPoint>(array.size)
         for (item in array) {
             val entry = item as? JsonObject
@@ -636,12 +643,15 @@ object McpToolRegistryV2 {
 
         // ---- selection ----
 
-        add("selection_extract", "Extracts a rectangular region of the active cel as a standalone pixel array.", "selection",
+        add("selection_extract", "Extracts a rectangular region of the active cel as a standalone pixel array (region capped at 65536 cells).", "selection",
             "session_id" to "string", "x" to "integer", "y" to "integer", "width" to "integer", "height" to "integer",
             required = listOf("session_id", "x", "y", "width", "height")) { params, store ->
             val session = sessionOf(params, store)
             val project = session.project
             val sel = selectionParam(params)
+            require(sel.w.toLong() * sel.h <= 65_536) {
+                "selection ${sel.w}x${sel.h} is ${sel.w.toLong() * sel.h} cells, beyond the 65536-cell echo cap"
+            }
             val patch = SelectionOps(project.width, project.height).extract(activeCelOrBlank(project), sel)
             jsonobj {
                 put("session_id", session.id)
@@ -954,11 +964,68 @@ object McpToolRegistryV2 {
 
         // ---- text ----
 
+        add("draw_text",
+            "Renders styled text (5x7/8x8 font, optional outline/glow/shadow, vertical mode) and STAMPS it onto the active cel at (x, y): lit text pixels overwrite the cel, text transparency leaves it untouched, out-of-canvas pixels are clipped and reported (placed_pixels/clipped_pixels). This closes the loop text_generate left open — the rendered pixels actually land in the session.",
+            "text",
+            "session_id" to "string", "text" to "string", "x" to "integer", "y" to "integer",
+            "color" to "string", "font" to "string", "scale" to "integer", "spacing" to "integer",
+            "outline_color" to "string", "glow_color" to "string", "shadow_color" to "string",
+            "vertical" to "boolean",
+            required = listOf("session_id", "text")) { params, store ->
+            val text = params.string("text")
+            val x = params.opt("x", 0)
+            val y = params.opt("y", 0)
+            require(x >= 0 && y >= 0) { "x/y must be non-negative (was x=$x, y=$y)" }
+            val color = if (params.has("color") && params.raw("color") !is JsonNull) {
+                colorParam(params, "color")
+            } else {
+                0xFFFFFFFF.toInt()
+            }
+            val spacing = params.opt("spacing", 0)
+            val scale = params.opt("scale", 1)
+            require(spacing in 0..64) { "'spacing' must be in [0, 64] (was $spacing)" }
+            require(scale in 1..16) { "'scale' must be in [1, 16] (was $scale)" }
+            val font = when (params.opt("font", "5x7").trim()) {
+                "5x7" -> Font5x7
+                "8x8" -> Font8x8
+                else -> throw IllegalArgumentException("font must be '5x7' or '8x8'")
+            }
+            val vertical = params.opt("vertical", false)
+            val options = TextOptions(
+                font = font,
+                letterSpacing = spacing,
+                scale = scale,
+                outlineColor = optionalColor(params.raw("outline_color")),
+                glowColor = optionalColor(params.raw("glow_color")),
+                shadowColor = optionalColor(params.raw("shadow_color")),
+            )
+            val rendered = if (vertical) {
+                TextStyler.renderVertical(text, color, options)
+            } else {
+                TextStyler.render(text, color, options)
+            }
+            val session = sessionOf(params, store)
+            val stamp = CelStamp.stamp(session.project, rendered, x, y)
+            val next = lab.engine.applyFrame(session.project, stamp.cel)
+            store.update(session.id, next)
+            jsonobj {
+                for ((key, value) in projectSummary(session, next).entries) put(key, value)
+                put("text_width", rendered.width)
+                put("text_height", rendered.height)
+                put("placed_pixels", stamp.placed)
+                put("clipped_pixels", stamp.clipped)
+                put("font", if (font === Font5x7) "5x7" else "8x8")
+                put("scale", scale)
+                put("vertical", vertical)
+            }
+        }
+
         add("text_style_render",
             "Renders styled text (font/spacing/scale/color options) and reports size and lit pixel count.",
             "text",
             "text" to "string", "color" to "string", "font" to "string", "spacing" to "integer",
-            "scale" to "integer", "options" to "object",
+            "scale" to "integer", "options" to "object", "alignment" to "string", "line_spacing" to "integer",
+            "outline_color" to "string", "glow_color" to "string", "shadow_color" to "string",
             required = listOf("text")) { params, _ ->
             val optionsRaw = when (val raw = params.raw("options")) {
                 null, is JsonNull -> null

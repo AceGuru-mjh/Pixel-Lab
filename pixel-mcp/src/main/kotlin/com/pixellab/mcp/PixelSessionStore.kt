@@ -92,8 +92,15 @@ class PixelSessionStore(
      * Looks up a session. When missing and [create] is true, a blank session
      * is registered under the requested [id] (agents that restart keep
      * working); with `create = false` the miss returns null.
+     *
+     * @throws IllegalArgumentException when [id] exceeds 128 characters —
+     *   every tier routes session lookups through this single entry point,
+     *   so the length guard holds everywhere at once.
      */
     fun get(id: String, create: Boolean = true): SessionState? {
+        require(id.length <= MAX_ID_LENGTH) {
+            "session id must be at most $MAX_ID_LENGTH characters (was ${id.length})"
+        }
         sessions[id]?.let { session ->
             synchronized(evictionLock) { session.touch() }
             return session
@@ -178,6 +185,9 @@ class PixelSessionStore(
 
         /** Default project name for auto-created sessions. */
         const val DEFAULT_NAME: String = "untitled"
+
+        /** Hard cap on session id length accepted by [get]. */
+        const val MAX_ID_LENGTH: Int = 128
     }
 
     /** Fresh opaque session id. */

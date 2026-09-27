@@ -1,10 +1,10 @@
-# MCP Tools — 151 个工具参考（tier 1–4 全量）
+# MCP Tools — 182 个工具参考（tier 1–6 全量）
 
 传输：JSON-RPC 2.0，`GET /sse`（事件流）+ `POST /messages`（请求/响应并镜像至 SSE）；可选 RFC 6455 WebSocket 通道（`start(port, websocketPort)`）。请求体支持 Content-Length 与 chunked。
-会话：`session_id` 参数（缺省自动创建，LRU 32 上限；生成类工具无 `session_id` 时自动新建）。
+会话：`session_id` 参数（缺省自动创建，LRU 32 上限；生成类工具无 `session_id` 时自动新建；id ≤ 128 字符）。
 错误形状：参数错误 `-32602` / 工具崩溃 `isError` / 未知工具 `-32601`。
-图像纪律：所有导出工具返回 `byte_count` 与摘要，不返回 base64。
-派发：`McpToolRouter` 层级链（tier 1 canvas/draw/layer/frame/palette/anim/text/template/export/project 55 个 → tier 2 形状/画笔/选区/对称/样式 35 个 → tier 3 io/生成/图集/tilemap/管线 29 个 → tier 4 分析/变换/色彩/矢量 32 个），`tools/list` 每条带 `tier` 字段。
+图像纪律：导出工具返回 `byte_count` 与摘要，≤ 2MB 时同时内联 `data_b64`（超出则提示改用 session_save / 缩小 scale）；V3 的 io_export_* 同样遵循。
+派发：`McpToolRouter` 层级链（tier 1 canvas/draw/layer/frame/palette/anim/text/template/export/project 58 个 → tier 2 形状/画笔/选区/对称/样式/文字 36 个 → tier 3 io/生成/图集/tilemap/管线 31 个 → tier 4 分析/变换/色彩/矢量 32 个 → tier 5 视觉 11 个 → tier 6 工效学 14 个），`tools/list` 每条带 `tier` 字段。
 
 ## 画布尺寸纪律
 
@@ -27,33 +27,33 @@
 
 `draw_pixel`(x,y,color) · `draw_line`(x0,y0,x1,y1,color,thickness?) · `draw_rect`(x,y,w,h,color,filled?) · `draw_circle`(cx,cy,r,color,filled?) · `draw_pixels`(points[],color) · `draw_stroke`(points[],color,thickness?) · `fill`(x,y,color,tolerance?) · `pick_color`(x,y) · `replace_color`(from,to,tolerance?) · `erase_pixels`(points[])
 
-## layer_*（8）
+## layer_*（9）
 
-`layer_add`(name?) · `layer_remove`(layer_id) · `layer_rename`(layer_id,name) · `layer_move`(layer_id,to_index) · `layer_set_opacity`(layer_id,opacity) · `layer_set_visible`(layer_id,visible) · `layer_set_locked`(layer_id,locked) · `layer_list`()
+`layer_add`(name?) · `layer_remove`(layer_id) · `layer_rename`(layer_id,name) · `layer_move`(layer_id,to_index) · `layer_set_opacity`(layer_id,opacity) · `layer_set_visible`(layer_id,visible) · `layer_set_locked`(layer_id,locked) · `layer_list`() · `layer_set_active`(layer_id) → 设定绘图目标图层（必须为现存图层 id，见 layer_list）
 
-## frame_*（6）
+## frame_*（7）
 
-`frame_add`(after_index?) · `frame_clone`(frame_index) · `frame_delete`(frame_index) · `frame_move`(from,to) · `frame_set_duration`(frame_index,duration_ms|null) · `frame_list`()
+`frame_add`(after_index?) · `frame_clone`(frame_index) · `frame_delete`(frame_index) · `frame_move`(from,to) · `frame_set_duration`(frame_index,duration_ms|null) · `frame_list`() · `frame_set_active`(frame_index) → 设定编辑帧（draw/批量类工具的默认落点；draw_batch 前先调它）
 
-## palette_*（3）
+## palette_*（4）
 
-`palette_list`（6 内置：pico-8/gameboy/nes54/endesga-32/clawd/kimi）· `palette_switch`(palette_id) · `palette_closest_color`(color→Lab 最近邻索引+hex)
+`palette_list`（6 内置：pico-8/gameboy/nes54/endesga-32/clawd/kimi）· `palette_switch`(palette_id) · `palette_set_colors`(colors[]: ARGB int 或 "#RRGGBB" 混排，去重保序，≤256；palette_id?="custom", name?) → 直接用颜色清单替换会话调色板 · `palette_closest_color`(color→Lab 最近邻索引+hex)
 
 ## convert_*（3）
 
-`convert_image`(pixels[]|说明, width, height, target_w?, target_h?, color_count?, dither?) · `convert_analyze`(同输入→建议尺寸/色数/调色板) · `convert_refine`(snap_alpha?, remove_stray?)
+`convert_image`(pixels[]|说明, width, height, target_w?, target_h?, color_count?, dither?, session_id?, commit?=true) → 量化+抖动；传 `session_id` 时把转换结果盖到该会话活动 cel（返回 placed/clipped 与 projectSummary，`commit=false` 只转换不落盘） · `convert_analyze`(同输入→建议尺寸/色数/调色板) · `convert_refine`(snap_alpha?, remove_stray?)
 
 ## anim_*（4）
 
 `anim_set_fps`(fps) · `anim_tag`(name,start,end) · `anim_breathe`(amplitude?) · `anim_preview_count`()
 
-## text_* / template_*（3）
+## text_* / template_*（4）
 
-`text_generate`(text, color, font?="5x7", scale?) → 尺寸+非零像素数 · `template_list`（6 模板）· `template_apply`(template_id) → 帧数/图层数
+`text_generate`(text, color, font?="5x7", scale?≤16, spacing?≤64) → 尺寸+非零像素数 · `draw_text`(session_id, text, x?, y?, color?, font?, scale?≤16, spacing?≤64, outline_color?, glow_color?, shadow_color?, vertical?) → 渲染后**盖印到会话活动 cel**（非透明文字像素覆盖，越界裁剪并返回 placed/clipped）——补齐 text_generate 只报尺寸不落笔的断链 · `template_list`（6 模板）· `template_apply`(template_id)
 
 ## export_*（5）
 
-`export_png`(scale?) · `export_spritesheet`(layout?, columns?, scale?, margin?) · `export_gif`(loop_count?, dither?) · `export_apng`(loop_count?) · `export_codex_pet`(pet_name?, tracks?) — 全部返回 `byte_count`
+`export_png`(scale?) · `export_spritesheet`(layout?, columns?, scale?, margin?) · `export_gif`(loop_count?, dither?) · `export_apng`(loop_count?) · `export_codex_pet`(pet_name?, tracks?) — 全部返回 `byte_count`，≤ 2MB 时附 `data_b64`（超出时给 note 提示 session_save / io_export_* + 小 scale）
 
 ## project_*（5）
 
@@ -68,18 +68,20 @@
 
 响应：`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"ok\":true,...}"}]}}`
 
-## V3 — 导入/生成/瓦片地图/图集/历史/流水线（29 个新工具，v3 传输含 WebSocket）
+## V3 — 导入/生成/瓦片地图/图集/历史/流水线（31 个新工具，v3 传输含 WebSocket）
 
 V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `transport/WebSocketServer.kt`：手写 RFC 6455 WebSocket（SHA-1 握手、帧编解码、分片、ping/pong、掩码强制校验），与 SSE 传输共用 JSON-RPC 核心。
 
-### v3-io（6）
+### v3-io（8）
 
 | 工具 | 参数 | 说明 |
 |:---|:---|:---|
 | `io_import_frames` | data_b64 | 魔数嗅探 PNG/APNG/GIF/QOI/BMP/ASE → 格式/尺寸/帧数/延迟/调色板提示 |
 | `io_import_project` | data_b64, name? | 项目 JSON（v2 线格式）→ 会话项目 |
-| `io_export_qoi` | frame_index?, session_id? | 合成帧 → QOI 1.0 字节 |
-| `io_export_bmp` | frame_index?, session_id? | 合成帧 → 32 位 BMP |
+| `io_import_image` | data_b64, name?, session_id? | 图片字节（PNG/APNG/GIF/QOI/BMP/ASE）→ 完整会话项目（GIF/APNG 帧时长与调色板提示保留；无 session_id 新建会话，有则覆写该会话）——导出的反通道，字节变回可编辑画布 |
+| `palette_import` | text, format?(jasc/gpl/hex 自动嗅探), session_id?, palette_id? | 调色板文本解析（JASC-PAL / GIMP .gpl / hex 列表，≤64KB）；有 session_id 则应用为会话调色板，无则只返回解析结果（applied=false） |
+| `io_export_qoi` | frame_index?, session_id? | 合成帧 → QOI 1.0 字节（≤ 2MB 附 data_b64） |
+| `io_export_bmp` | frame_index?, session_id? | 合成帧 → 32 位 BMP（≤ 2MB 附 data_b64） |
 | `io_export_ico` | sizes?, session_id? | 合成帧 → 多分辨率 ICO（默认 [16,32,48]） |
 | `io_export_atlas` | padding?, extrude?, trim?, format?, scale? | 全帧打包图集 PNG + 引擎元数据（generic/godot3/godot4/tiled/phaser） |
 
@@ -89,7 +91,7 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 ### v3-map（5）
 
-`tilemap_create`(rows[]: "01" 字符串, tile_size?, tileset?) → map_id · `tilemap_autotile`(map_id, terrain_tag, mode: blob47/simple16/wang) · `tilemap_render`(map_id, scale?) → PNG · `tilemap_iso_render`(map_id, tile_w?, tile_h?, height_offsets[]?) → PNG · `iso_diamond_mask`(tile_w, tile_h) → PNG
+`tilemap_create`(rows[]: "01" 字符串, width?, height?, tile_size?=8, map_id?, session_id?) → map_id（瓦片集固定为草地 blob-47） · `tilemap_autotile`(map_id, terrain_tag, mode: blob47/simple16/wang) · `tilemap_render`(map_id, scale?) → PNG · `tilemap_iso_render`(map_id, tile_w?, tile_h?, height_offsets[]?) → PNG · `iso_diamond_mask`(tile_w, tile_h) → PNG
 
 ### v3-atlas（2）
 
@@ -125,11 +127,11 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 `frame_contours`(session_id, color, tolerance, simplify) → 走廊格轮廓环（洞标记 + path 字符串） · `export_svg`(session_id, mode[runs/outline], title) → 静态 SVG（每色一 path，b64 返回） · `export_svg_animated`(session_id, frame_duration_ms, loop, title) → SMIL 动画 SVG（每帧一个 g + 离散 opacity 驱动）
 
-**累计：151 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32）。
+**累计：157 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 32）。
 
 ## V5（11 个）— Agent 视觉（第 5 轮：让 Agent 看见画布）
 
-修复"盲画"问题：此前 151 个工具全是写操作，Agent 画完无法核对。V5 全部只读 —— 不产生撤销记录、不改动会话。
+修复"盲画"问题：此前 157 个工具全是写操作，Agent 画完无法核对。V5 全部只读 —— 不产生撤销记录、不改动会话。
 
 ### v5-read（4）
 
@@ -143,34 +145,38 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 `canvas_structure`(session_id, connectivity[four/eight], max_blobs) → 连通区域解读（面积/外接框/主色/洞/贴边/填充比/形状判词"实心块/环形/细轮廓"）+ 宏观占用指纹格 · `canvas_symmetry`(session_id, tolerance 0..255) → 水平/垂直/180°/对角对称探针（逐轴 holds + 失配对数） · `canvas_diff`(session_id, mode[last_op/frames/sessions], frame_a, frame_b, other_session_id) → 差异报告（+增/-删/~改色像素数、各类包围框、色变迁移表、一句总结；last_op 对比最近一次操作前快照，引擎 peekBefore 非变异读取）
 
-**累计：162 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32 + v5 11）。
+**累计：168 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 32 + v5 11）。
 
 ### 本轮契约修复（Agent 可理解性）
 
 `canvas_create` / `project_new` 新增可选 `session_id` 参数：LLM 天然会传会话 id 固定新画布；此前该参数被静默忽略、画布落在服务端随机 id 上，后续 draw 又按 auto-create 语义另建 16x16 默认会话，导致尺寸参数看似失效。现在：指定 id 直接命名会话；id 已占用时报 `-32602`（提示换 id 或 canvas_info 查看）。
 
-## V6（12 个）— Agent 工效学（第 6 轮：批量/检查点/持久化/校验）
+## V6（14 个）— Agent 工效学（第 6 轮：批量/检查点/持久化/校验 + 闭环补齐）
 
-解决长会话四大痛点：**网络延迟**（一图元一往返）、**易碎性**（中途参数错留下半成品）、**不持久**（进程死即丢会话）、**不可验证**（改没改要全量读画布）。
+解决长会话四大痛点：**网络延迟**（一图元一往返）、**易碎性**（中途参数错留下半成品）、**不持久**（进程死即丢会话）、**不可验证**（改没改要全量读画布）；本轮补上**视觉闭环**（sketch_draw）与磁盘项目删除。
 
 ### v6-batch（1）
 
-`draw_batch`(session_id, ops[64 上限], dry_run, frame_index) → **一次调用多个图元**。ops 为对象数组，每项 `{op: 'pixel'|'line'|'rect'|'circle'|'stroke'|'fill'|'replace'|'erase', ...参数}`（参数与同名 draw_* 工具一致）。**验证先行**：所有 op 先于任何引擎调用校验（几何/笔宽/填充种子/图层锁），坏 op 报 `op[i] (kind): 原因`，绝无半执行批次。返回逐 op applied/noop、聚合变更摘要（+增/-删/~改像素 + 各类包围框）、前后指纹、新增历史条数。`dry_run=true` 只校验不落笔。每个 applied op 一条撤销记录（label `batch:<kind>`），配合 checkpoint 整批回滚。
+`draw_batch`(session_id, ops[64 上限], dry_run) → **一次调用多个图元**。ops 为对象数组，每项 `{op: 'pixel'|'line'|'rect'|'circle'|'stroke'|'fill'|'replace'|'erase', ...参数}`（参数与同名 draw_* 工具一致）。**所有 batch op 一律落在 ACTIVE frame 上，没有 frame_index 参数——先 frame_set_active 选帧再批量**。**验证先行**：所有 op 先于任何引擎调用校验（几何/笔宽/填充种子/图层锁），坏 op 报 `op[i] (kind): 原因`，绝无半执行批次。返回逐 op applied/noop、聚合变更摘要（+增/-删/~改像素 + 各类包围框）、前后指纹、新增历史条数。`dry_run=true` 只校验不落笔。每个 applied op 一条撤销记录（label `batch:<kind>`），配合 checkpoint 整批回滚。
 
 ### v6-verify（1）
 
-`canvas_checksum`(session_id, frame_index) → FNV-1a 64 十六进制指纹 + 可见像素数。alpha 零色 RGB 通道规范化（透明即等价），尺寸混入摘要防前缀碰撞。改一字节即变——比 canvas_read 便宜得多的"落笔了吗"。
+`canvas_checksum`(session_id, frame_index?, scope=frame|project) → FNV-1a 64 十六进制指纹 + 可见像素数。alpha 零色 RGB 通道规范化（透明即等价），尺寸混入摘要防前缀碰撞。改一字节即变——比 canvas_read 便宜得多的"落笔了吗"。`scope=project` 逐帧给出 `{index, checksum, visible_pixels}`，另附 `project_checksum`（逐帧摘要按帧序拼接后串的 ASCII 字节再做一次 FNV-1a 64——算法在描述里写明，跨进程稳定）。
 
 ### v6-checkpoint（4）
 
-`checkpoint_set`(session_id, name) → 命名撤销深度锚（32 个/会话 FIFO，同名覆盖）· `checkpoint_list`(session_id) → 检查点清单（深度/时间/上层 label）· `checkpoint_rollback`(session_id, name) → **一次调用回滚到锚点**（幂等；项目血脉切换则拒绝并说明）· `checkpoint_delete`(session_id, name)。典型流：set → 险改 → canvas_diff 核对 → 不满意即 rollback。
+`checkpoint_set`(session_id, name) → 命名撤销深度锚（32 个/会话 FIFO，同名覆盖）· `checkpoint_list`(session_id) → 检查点清单（深度/时间/上层 label）· `checkpoint_rollback`(session_id, name) → **一次调用回滚到锚点**（幂等；项目血脉切换或检查点不存在报 `-32602`，不再是 isError）· `checkpoint_delete`(session_id, name)。典型流：set → 险改 → canvas_diff 核对 → 不满意即 rollback。
 
-### v6-persist（4）
+### v6-persist（5）
 
-`session_save`(session_id, name) → 存档为命名槽（字母/数字/._- 64 上限；SlotStore 槽文档 + ProjectStore 像素，原子写）· `session_load`(name, session_id?) → 载入槽（无 session_id 新建会话）· `session_saved_list` → 存档清单（最新优先 + 指针完好性 + 项目在盘性）· `session_saved_delete`(name)。需服务端以 `persistenceRoot` 启动（`PixelMcpServer(config, persistenceRoot)`）；未配置时四个工具报可操作配置错误。**服务器重启/换对话续作**：save → 重启 → load。
+`session_save`(session_id, name) → 存档为命名槽（字母/数字/._- 64 上限；SlotStore 槽文档 + ProjectStore 像素，原子写）· `session_load`(name, session_id?) → 载入槽（无 session_id 新建会话）· `session_saved_list` → 存档清单（最新优先 + 指针完好性 + 项目在盘性）· `session_saved_delete`(name) → 只删槽指针，像素保留 · `project_delete`(project_id) → 从持久化根删除项目像素本体（槽指针变为不可读；内存会话不受影响）。需服务端以 `persistenceRoot` 启动（`PixelMcpServer(config, persistenceRoot)`）；未配置时这五个工具报可操作配置错误。**服务器重启/换对话续作**：save → 重启 → load。
 
 ### v6-hygiene（2）
 
-`session_rename`(session_id, name) → 项目改名（不产生撤销记录）· `project_export_json`(session_id) → 导出 v2 线格式文档（data_b64 + byte_count）——补上 io_import_project 的反向通道，跨服务器迁移/嵌入提示词。
+`session_rename`(session_id, name) → 项目改名（不产生撤销记录）· `project_export_json`(session_id) → 导出 v2 线格式文档（data_b64 + byte_count，≤ 2MB；超出时提示 session_save）——补上 io_import_project 的反向通道，跨服务器迁移/嵌入提示词。
 
-**累计：174 个 MCP 工具**（v1 34 + v2 26 + v3 59 + v4 32 + v5 11 + v6 12）。
+### v6-sketch（1）
+
+`sketch_draw`(session_id, sketch, x?, y?, frame_index?) → 把 canvas_read(format="sketch") / canvas_legend 的文本**画回会话**：图例行 `C=#RRGGBB|#AARRGGBB`、`---` 分隔、字符格（'.' 透明）。解析后的非透明格盖印到指定帧（默认 active）的活动 cel；x/y ≥ 0，越界格裁剪并以 placed/clipped 计数返回，另附 parsed {width,height,points} 与 projectSummary。读 → 改文本 → 画回，视觉闭环落地。
+
+**累计：182 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 32 + v5 11 + v6 14）。

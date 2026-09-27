@@ -17,6 +17,7 @@ import com.pixellab.core.model.Palette
 import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.SpriteProject
 import com.pixellab.core.palette.BuiltInPalettes
+import com.pixellab.core.palette.PaletteLibrary
 import com.pixellab.mcp.json.JsonNull
 import com.pixellab.mcp.json.JsonNumber
 import com.pixellab.mcp.json.JsonObject
@@ -131,14 +132,20 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
         return params.int(key)
     }
 
-    /** Optional built-in palette parameter (null when absent or JSON null). */
-    private fun paletteParam(params: JsonObject, key: String = "palette_id"): Palette? {
-        val raw = params.raw(key) ?: return null
-        if (raw is JsonNull) return null
+    /**
+     * Palette for the read formats: `palette_id` when given (resolved
+     * against the extended library first, then the built-ins — the same
+     * domain every other tier uses), else the session project's own
+     * palette, so reading defaults to what the agent is drawing with.
+     */
+    private fun paletteParam(params: JsonObject, project: SpriteProject, key: String = "palette_id"): Palette {
+        val raw = params.raw(key)
+        if (raw == null || raw is JsonNull) return project.palette
         val id = (raw as? JsonString)?.value
             ?: throw IllegalArgumentException("parameter '$key' must be a palette id string")
-        return BuiltInPalettes.byId(id)
-            ?: throw IllegalArgumentException("unknown palette '$id' (see palette_list)")
+        return PaletteLibrary.byId(id)
+            ?: BuiltInPalettes.byId(id)
+            ?: throw IllegalArgumentException("unknown palette '$id' (see palette_library_list)")
     }
 
     /** Frame size echo shared by every v5 result envelope. */
@@ -210,10 +217,9 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
                     "format must be hex, palette_index, rle or sketch (was '${params.opt("format", "hex")}')",
                 )
             }
-            val palette = paletteParam(params)
-            if (format == RegionFormat.PALETTE_INDEX) {
-                requireNotNull(palette) { "format 'palette_index' requires parameter 'palette_id'" }
-            }
+            // palette_index grids (and sketch legend snapping) default to
+            // the session's own palette when no palette_id is given.
+            val palette = paletteParam(params, session.project)
             val read = RegionReader.read(frame, RegionRequest(x, y, width, height))
             jsonobj {
                 for ((k, v) in frameMeta(session.id, frame, params.opt("frame_index", session.project.activeFrameIndex)).entries) put(k, v)
@@ -254,7 +260,11 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
             }
             val maxWidth = params.opt("max_width", 64)
             require(maxWidth in 4..256) { "max_width must be in 4..256 (was $maxWidth)" }
-            val transparentChar = params.opt("transparent_char", ".").firstOrNull() ?: '.'
+            val transparentRaw = params.opt("transparent_char", ".")
+            require(transparentRaw.length == 1) {
+                "transparent_char must be a single character (was '$transparentRaw')"
+            }
+            val transparentChar = transparentRaw[0]
             val render = AsciiRenderer.render(
                 frame,
                 style,
@@ -264,7 +274,7 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
                     asciiOnly = params.opt("ascii_only", false),
                     invertShades = params.opt("invert_shades", false),
                 ),
-                paletteParam(params),
+                paletteParam(params, session.project),
             )
             jsonobj {
                 for ((k, v) in frameMeta(session.id, frame, params.opt("frame_index", session.project.activeFrameIndex)).entries) put(k, v)
@@ -336,7 +346,7 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
             val read = RegionReader.read(frame, RegionRequest(0, 0, frame.width, frame.height))
             jsonobj {
                 for ((k, v) in frameMeta(session.id, frame, params.opt("frame_index", session.project.activeFrameIndex)).entries) put(k, v)
-                put("sketch", RegionReader.format(read, RegionFormat.SKETCH, paletteParam(params)))
+                put("sketch", RegionReader.format(read, RegionFormat.SKETCH, paletteParam(params, session.project)))
                 put("hint", "edit the grid, keep the legend lines 'C=#hex', then sketch_draw with this text")
             }
         }
@@ -345,7 +355,7 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
 
         add(
             "canvas_describe",
-            "Natural-language description of the canvas for agents: dimensions, occupancy, dominant colors with names, region structure, symmetry and a coarse layout fingerprint. Optional sections parameter (comma list of colors,structure,symmetry,fingerprint) and palette_id for palette-coverage auditing.",
+            "Natural-language description of the canvas for agents: dimensions, occupancy, dominant colors with names, region structure, symmetry and a coarse layout fingerprint. Optional sections parameter (comma list of colors,structure,symmetry,fingerprint) and palette_id for palette-coverage auditing (defaults to the session's own palette).",
             "v5-describe",
             "session_id" to "string", "frame_index" to "integer", "palette_id" to "string",
             "sections" to "string", "max_colors" to "integer", "max_blobs" to "integer",
@@ -368,7 +378,7 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
                 maxColors = params.opt("max_colors", 8).coerceIn(1, 32),
                 maxBlobs = params.opt("max_blobs", 5).coerceIn(1, 32),
             )
-            val palette = paletteParam(params)
+            val palette = paletteParam(params, session.project)
             val description = FrameDescriber.describe(frame, options, palette)
             jsonobj {
                 for ((k, v) in frameMeta(session.id, frame, params.opt("frame_index", session.project.activeFrameIndex)).entries) put(k, v)
@@ -439,7 +449,7 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
 
         add(
             "canvas_colors",
-            "Color census of the canvas: every distinct color with count, hex and nearest CSS name, sorted most-frequent first, plus family rollup (red/green/blue/...). With palette_id, adds coverage: which palette entries are used and which canvas colors are off-palette.",
+            "Color census of the canvas: every distinct color with count, hex and nearest CSS name, sorted most-frequent first, plus family rollup (red/green/blue/...). Adds palette coverage (used entries / off-palette shades) — audited against the session's palette by default, or palette_id to audit another.",
             "v5-describe",
             "session_id" to "string", "frame_index" to "integer",
             "max_colors" to "integer", "palette_id" to "string",
@@ -449,7 +459,7 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
             val frame = readFrame(params, session.project)
             val census = ColorCensus.census(frame)
             val maxColors = params.opt("max_colors", 16).coerceIn(1, 64)
-            val palette = paletteParam(params)
+            val palette = paletteParam(params, session.project)
             jsonobj {
                 for ((k, v) in frameMeta(session.id, frame, params.opt("frame_index", session.project.activeFrameIndex)).entries) put(k, v)
                 put("unique_colors", census.uniqueColors)
@@ -473,19 +483,17 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
                         })
                     }
                 })
-                palette?.let {
-                    val coverage = ColorCensus.coverage(census, it)
-                    put("coverage", jsonobj {
-                        put("palette_id", coverage.paletteId)
-                        put("used_entries", coverage.usedEntries)
-                        put("palette_size", coverage.paletteSize)
-                        put("orphan_shades", coverage.orphanShades)
-                        if (coverage.orphanExamples.isNotEmpty()) {
-                            put("orphan_examples", jsonarray { coverage.orphanExamples.forEach { e -> add(JsonString(e)) } })
-                        }
-                        put("per_entry_pixels", jsonarray { coverage.matchedPixels.forEach { p -> add(JsonNumber.of(p.toLong())) } })
-                    })
-                }
+                val coverage = ColorCensus.coverage(census, palette)
+                put("coverage", jsonobj {
+                    put("palette_id", coverage.paletteId)
+                    put("used_entries", coverage.usedEntries)
+                    put("palette_size", coverage.paletteSize)
+                    put("orphan_shades", coverage.orphanShades)
+                    if (coverage.orphanExamples.isNotEmpty()) {
+                        put("orphan_examples", jsonarray { coverage.orphanExamples.forEach { e -> add(JsonString(e)) } })
+                    }
+                    put("per_entry_pixels", jsonarray { coverage.matchedPixels.forEach { p -> add(JsonNumber.of(p.toLong())) } })
+                })
             }
         }
 

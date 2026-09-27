@@ -105,6 +105,12 @@ class WebSocketServer(
     port: Int,
     private val handler: (String) -> String?,
     private val logger: ((String) -> Unit)? = null,
+    /**
+     * Required bearer token for the opening HTTP handshake, or null to
+     * accept unauthenticated connections. Loopback binding does not isolate
+     * an Android app — every other app on the device can reach 127.0.0.1.
+     */
+    private val authToken: String? = null,
 ) {
 
     /**
@@ -168,6 +174,9 @@ class WebSocketServer(
     private val closed = AtomicBoolean(false)
     private val nextConnectionId = AtomicInteger(0)
 
+    /** In-flight connections INCLUDING pre-handshake ones (accept-time cap). */
+    private val inFlight = AtomicInteger(0)
+
     init {
         val acceptThread = Thread({ acceptLoop() }, "pixel-ws-accept-${serverSocket.localPort}")
         acceptThread.isDaemon = true
@@ -214,10 +223,34 @@ class WebSocketServer(
                 closeQuietly(socket)
                 break
             }
+            // Pre-handshake cap: the MAX_CONNECTIONS check used to run only
+            // AFTER the handshake completed, so a flood of connects that
+            // never finished handshakes still spawned one thread each —
+            // an OOM in Thread.start() would kill the accept thread (and
+            // the process on Android) outright.
+            if (inFlight.incrementAndGet() > MAX_CONNECTIONS + 16) {
+                inFlight.decrementAndGet()
+                closeQuietly(socket)
+                logger?.invoke("refused, in-flight budget exhausted")
+                continue
+            }
             val id = nextConnectionId.incrementAndGet()
-            val thread = Thread({ serve(socket, id) }, "pixel-ws-conn-$id")
-            thread.isDaemon = true
-            thread.start()
+            try {
+                val thread = Thread({
+                    try {
+                        serve(socket, id)
+                    } finally {
+                        inFlight.decrementAndGet()
+                    }
+                }, "pixel-ws-conn-$id")
+                thread.isDaemon = true
+                thread.start()
+            } catch (error: Throwable) {
+                // Thread creation failed (OOM): do not let it kill the
+                // accept loop — drop this one connection and keep serving.
+                inFlight.decrementAndGet()
+                closeQuietly(socket)
+            }
         }
     }
 
@@ -237,7 +270,16 @@ class WebSocketServer(
             }
             socket.soTimeout = IDLE_TIMEOUT_MS
             connection = Connection(socket, input, output, id)
-            if (connections.size >= MAX_CONNECTIONS) {
+            // Registration slots are taken atomically (check-then-add let
+            // two concurrent handshakes at 63 connections both register).
+            var registered = false
+            synchronized(connections) {
+                if (connections.size < MAX_CONNECTIONS) {
+                    connections.add(connection)
+                    registered = true
+                }
+            }
+            if (!registered) {
                 // Over the connection budget: politely refuse (1013 = Try
                 // Again Later) instead of growing threads without bound.
                 sendClose(connection, 1013)
@@ -245,7 +287,6 @@ class WebSocketServer(
                 logger?.invoke("conn#$id: refused, connection budget exhausted")
                 return
             }
-            connections.add(connection)
             if (closed.get()) {
                 // close() may have snapshotted and cleared the registry
                 // between this connection's accept and its registration —
@@ -319,6 +360,29 @@ class WebSocketServer(
 
         val versionOk = version == "13"
         val connectionOk = connectionTokens.contains("upgrade")
+
+        // Bearer-token gate: refused at the HTTP layer (before any WS
+        // framing), mirroring the HTTP transport's 401 semantics.
+        val token = authToken
+        if (token != null) {
+            val authorization = headers["authorization"] ?: ""
+            val expected = "Bearer $token"
+            var diff = 0
+            for (i in authorization.indices) diff = diff or (authorization[i].code xor expected[i].code)
+            val authorized = authorization.length == expected.length && diff == 0
+            if (!authorized) {
+                writeHttpResponse(
+                    output,
+                    "HTTP/1.1 401 Unauthorized\r\n" +
+                        "Content-Type: text/plain\r\n" +
+                        "Content-Length: 12\r\n" +
+                        "Connection: close\r\n\r\nunauthorized",
+                )
+                logger?.invoke("handshake refused: unauthorized")
+                return false
+            }
+        }
+
         if (method != "GET" || !upgrade.contains("websocket") || !isWebSocketKey(key) || !versionOk || !connectionOk) {
             val reason = when {
                 method != "GET" -> "method_not_get"
@@ -351,11 +415,19 @@ class WebSocketServer(
         return true
     }
 
-    /** RFC 6455 §4.2.2: exactly 24 base64 characters (16 decoded bytes; `=` padding allowed). */
+    /** RFC 6455 §4.2.2: exactly 24 base64 characters decoding to 16 bytes
+     *  (two mandatory `=` trailers — a full base64 alphabet with no padding
+     *  decodes to 17+ bytes and is not a valid key). */
     private fun isWebSocketKey(key: String): Boolean {
         if (key.length != 24) return false
-        return key.all {
-            it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' || it == '='
+        if (!key.all {
+                it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '/' || it == '='
+            }
+        ) return false
+        return try {
+            Base64.getDecoder().decode(key).size == 16
+        } catch (error: IllegalArgumentException) {
+            false
         }
     }
 
@@ -620,11 +692,13 @@ class WebSocketServer(
         writeFrame(connection, fin = true, opcode = OP_CLOSE, payload = payload)
     }
 
-    /** Legal close codes ON the wire (RFC 6455 §7.4.1/§7.4.2): 1000-1003,
-     *  1007-1011 (1004/1005/1006 are reserved/never-sent), 3000-4999
-     *  (registered/application range). */
+    /** Legal close codes ON the wire (RFC 6455 §7.4.1/§7.4.2 + IANA
+     *  registrations): 1000-1003, 1007-1011, 1012-1014 (1004/1005/1006 are
+     *  reserved/never-sent), 3000-4999 (registered/application range). The
+     *  server itself sends 1013 on budget exhaustion, so rejecting a
+     *  peer's 1013 was self-contradictory. */
     private fun isLegalCloseCode(code: Int): Boolean =
-        code in 1000..1003 || code in 1007..1011 || code in 3000..4999
+        code in 1000..1003 || code in 1007..1014 || code in 3000..4999
 
     /** Writes one unmasked server frame under the connection write lock. */
     private fun writeFrame(connection: Connection, fin: Boolean, opcode: Int, payload: ByteArray) {

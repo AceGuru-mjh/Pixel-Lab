@@ -13,6 +13,11 @@
 - 打开面板里的开关 → 服务器启动（固定端口，配置一次永久有效）
 - 状态卡会显示：HTTP `127.0.0.1:8901`（`POST /mcp` + `GET /sse`）、
   WebSocket `127.0.0.1:8902`
+- **鉴权**：每次启动都会生成新的 Bearer token（面板「Connect」卡片可一键
+  复制）——所有请求必须带 `Authorization: Bearer <token>` 头与
+  `Content-Type: application/json`。这不是可选项：Android 上 loopback
+  由**全机所有 App 共享**，且浏览器页面可用 `text/plain` 简单请求跨域
+  打到本机端口；token + Content-Type 门禁同时封死这两条路径。
 - 持久化目录 = App 私有 `files/pixel-lab`（与画廊**同一个存储**：
   Agent 的 `session_save` 存档会出现在人类画廊里，反之亦然）
 
@@ -20,8 +25,8 @@
 
 | 方式 | 操作 | 适用 |
 |:---|:---|:---|
-| **配置导入** | 设置 → MCP 服务器 → 导入 → 选本目录 `mcp-servers.pixellab.json` | 最稳，一次配置 |
-| **对话内连接** | 直接对 Agent 说：「连接 MCP 服务器 http://127.0.0.1:8901/mcp 然后列出工具」→ 宿主 `mcp_connect` 工具自动注册 | 临时试用 |
+| **配置导入** | 设置 → MCP 服务器 → 导入 → 选本目录 `mcp-servers.pixellab.json`（把 Authorization 头里的 token 换成面板显示值） | 最稳，一次配置 |
+| **对话内连接** | 直接对 Agent 说：「连接 MCP 服务器 http://127.0.0.1:8901/mcp，请求头 Authorization: Bearer <token>，然后列出工具」→ 宿主 `mcp_connect` 工具自动注册 | 临时试用 |
 | **市场页添加** | MCP 市场页手动填 streamable_http + URL | 有 UI 偏好的用户 |
 
 连接成功后 **174 个工具**以 `mcp__pixel-lab__*` 前缀注册为宿主一等工具，

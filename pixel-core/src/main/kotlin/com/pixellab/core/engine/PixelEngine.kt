@@ -27,30 +27,66 @@ import com.pixellab.core.nativelib.NativePixelOps
  * never be unlocked.
  *
  * Callers are expected to feed the project returned by the previous
- * operation back into the next one (the standard editor loop). Not
- * thread-safe; serialize access per project.
+ * operation back into the next one (the standard editor loop).
+ *
+ * ## Thread safety
+ *
+ * The per-project stacks live in a [java.util.concurrent.ConcurrentHashMap]
+ * and every stack operation synchronizes on its own history object, so
+ * distinct projects can be edited from distinct threads. Operations on the
+ * SAME project must still be serialized by the caller (the stacks'
+ * before/after chains would interleave otherwise) — which is exactly the
+ * discipline the MCP router's dispatch mutex and single-owner editors
+ * already provide.
  */
 class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
 
-    /** One recorded change: the states before and after, plus provenance. */
+    /**
+     * One recorded change: the states before and after, plus provenance and
+     * a per-project monotonic serial. The serial is the identity anchor
+     * checkpoint tracking needs: stack depth alone cannot tell "same state"
+     * from "different state at the same depth" after a diverging
+     * undo-then-edit sequence.
+     */
     private class ChangeRecord(
         val before: SpriteProject,
         val after: SpriteProject,
         val label: String,
         val timestamp: Long,
+        val serial: Long,
     )
 
-    /** Per-project undo/redo stacks, both ordered oldest-first. */
+    /**
+     * Per-project undo/redo stacks, both ordered oldest-first, plus the
+     * serial counter and the running memory estimate used for byte-budget
+     * eviction (see [PixelLabConfig.maxUndoBytes]).
+     */
     private class ProjectHistory {
         val undo = ArrayDeque<ChangeRecord>()
         val redo = ArrayDeque<ChangeRecord>()
+        var nextSerial: Long = 1
+        var estimatedBytes: Long = 0
     }
 
     private companion object {
         private const val TAG = "PixelEngine"
+
+        /** Radius ceiling for drawCircle, aligned with the MCP tool guard. */
+        private const val MAX_CIRCLE_RADIUS = 65536
     }
 
-    private val histories = HashMap<String, ProjectHistory>()
+    private val histories = java.util.concurrent.ConcurrentHashMap<String, ProjectHistory>()
+
+    /** Snapshot byte weight of one project state (cel rasters only). */
+    private fun estimateBytes(project: SpriteProject): Long {
+        var bytes = 0L
+        for (frame in project.frames) {
+            for (cel in frame.cels.values) {
+                bytes += cel.pixels.size.toLong() * 4L
+            }
+        }
+        return bytes
+    }
 
     // ---- canvas-level operations (active cel of the active frame) ----------
 
@@ -142,6 +178,9 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         filled: Boolean,
     ): SpriteProject {
         require(r >= 0) { "Circle radius must be >= 0 (was $r)" }
+        // A materialized (2r+1)^2 point list means an unchecked radius is a
+        // memory-exhaustion primitive; 65536 already covers any sane sprite.
+        require(r <= MAX_CIRCLE_RADIUS) { "Circle radius must be <= $MAX_CIRCLE_RADIUS (was $r)" }
         val points = DrawOps.circle(cx, cy, r, filled)
         return editActiveCel(project, "drawCircle") { it.withPixels(points, argb) }
     }
@@ -334,10 +373,17 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         } else {
             project.activeLayerId
         }
-        // Retarget activity before the layer list shrinks: [SpriteProject]
-        // validates activeLayerId against the layer stack on every copy.
-        val retargeted = project.copy(activeLayerId = activeLayerId)
-        val next = retargeted.withLayers(layers).copy(frames = frames)
+        // ONE copy pairs the shrunken layer stack with the stripped frames.
+        // Constructing an intermediate that kept the old frames (cels still
+        // referencing the removed layer) alongside the new layers would
+        // fail SpriteProject's cel-references-layer validation — the
+        // historical two-step here threw for every layer that had content.
+        // nextLayerId deliberately stays monotonic: ids are never reused.
+        val next = project.copy(
+            layers = layers,
+            frames = frames,
+            activeLayerId = activeLayerId,
+        )
         return commit(project, next, "removeLayer")
     }
 
@@ -421,16 +467,21 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
     // ---- history ------------------------------------------------------------
 
     /**
-     * Provenance of one undoable change: the mutating operation's label and
-     * the wall-clock time it was committed.
+     * Provenance of one undoable change: the mutating operation's label, the
+     * wall-clock time it was committed and its per-project monotonic commit
+     * serial (see [historyInfo]).
      */
-    data class HistoryEntry(val label: String, val timestamp: Long)
+    data class HistoryEntry(val label: String, val timestamp: Long, val serial: Long)
 
     /** True when [undo] would return a project for [projectId]. */
-    fun canUndo(projectId: String): Boolean = histories[projectId]?.undo?.isNotEmpty() == true
+    fun canUndo(projectId: String): Boolean = histories[projectId]?.let { h ->
+        synchronized(h) { h.undo.isNotEmpty() }
+    } == true
 
     /** True when [redo] would return a project for [projectId]. */
-    fun canRedo(projectId: String): Boolean = histories[projectId]?.redo?.isNotEmpty() == true
+    fun canRedo(projectId: String): Boolean = histories[projectId]?.let { h ->
+        synchronized(h) { h.redo.isNotEmpty() }
+    } == true
 
     /**
      * Undoes the latest change of [projectId]: the pre-change project is
@@ -442,9 +493,11 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
      */
     fun undo(projectId: String): SpriteProject? {
         val history = histories[projectId] ?: return null
-        val record = history.undo.removeLastOrNull() ?: return null
-        history.redo.addLast(record)
-        return record.before
+        return synchronized(history) {
+            val record = history.undo.removeLastOrNull() ?: return@synchronized null
+            history.redo.addLast(record)
+            record.before
+        }
     }
 
     /**
@@ -456,18 +509,26 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
      */
     fun redo(projectId: String): SpriteProject? {
         val history = histories[projectId] ?: return null
-        val record = history.redo.removeLastOrNull() ?: return null
-        history.undo.addLast(record)
-        return record.after
+        return synchronized(history) {
+            val record = history.redo.removeLastOrNull() ?: return@synchronized null
+            history.undo.addLast(record)
+            record.after
+        }
     }
 
     /**
-     * Labels and timestamps of the undoable changes of [projectId], ordered
-     * oldest to newest. The redo stack is not included.
+     * Labels, timestamps and commit serials of the undoable changes of
+     * [projectId], ordered oldest to newest. The redo stack is not included.
+     * The serial is a per-project monotonic counter assigned at commit time —
+     * it identifies the *state*, which checkpoint anchors compare after
+     * divergence (undo-then-edit leaves the depth the same but the state,
+     * and therefore the serial, different).
      */
     fun historyInfo(projectId: String): List<HistoryEntry> {
         val history = histories[projectId] ?: return emptyList()
-        return history.undo.map { HistoryEntry(it.label, it.timestamp) }
+        return synchronized(history) {
+            history.undo.map { HistoryEntry(it.label, it.timestamp, it.serial) }
+        }
     }
 
     /**
@@ -479,7 +540,7 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
      * @return the pre-change project, or null when there is nothing to undo.
      */
     fun peekBefore(projectId: String): SpriteProject? =
-        histories[projectId]?.undo?.lastOrNull()?.before
+        histories[projectId]?.let { h -> synchronized(h) { h.undo.lastOrNull()?.before } }
 
     /** Drops all undo and redo records of [projectId]. */
     fun clearHistory(projectId: String) {
@@ -490,16 +551,31 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
 
     /**
      * Records a successful change: pushes a [ChangeRecord] onto the undo
-     * stack (evicting the oldest beyond [PixelLabConfig.maxUndoDepth]) and
-     * clears the redo stack. Returns [after] as the new working project, or
-     * [before] itself when nothing structurally changed.
+     * stack (evicting the oldest beyond [PixelLabConfig.maxUndoDepth] or the
+     * [PixelLabConfig.maxUndoBytes] estimate) and clears the redo stack.
+     * Returns [after] as the new working project, or [before] itself when
+     * nothing structurally changed.
      */
     private fun commit(before: SpriteProject, after: SpriteProject, label: String): SpriteProject {
         if (after == before) return before
-        val history = histories.getOrPut(before.id) { ProjectHistory() }
-        history.undo.addLast(ChangeRecord(before, after, label, System.currentTimeMillis()))
-        while (history.undo.size > config.maxUndoDepth) history.undo.removeFirst()
-        history.redo.clear()
+        val history = histories.computeIfAbsent(before.id) { ProjectHistory() }
+        synchronized(history) {
+            history.undo.addLast(
+                ChangeRecord(before, after, label, System.currentTimeMillis(), history.nextSerial++),
+            )
+            history.estimatedBytes += estimateBytes(after)
+            // Depth cap AND byte budget: whichever trips first evicts the
+            // oldest records. Deep-but-cheap histories behave as before;
+            // a few 8192x8192 mega-snapshots now evict instead of stacking
+            // tens of gigabytes.
+            while (history.undo.size > config.maxUndoDepth ||
+                (history.estimatedBytes > config.maxUndoBytes && history.undo.size > 1)
+            ) {
+                val evicted = history.undo.removeFirst() ?: break
+                history.estimatedBytes -= estimateBytes(evicted.after)
+            }
+            history.redo.clear()
+        }
         return after
     }
 
@@ -576,7 +652,7 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         replacement: Int,
         tolerance: Int,
     ): IntArray {
-        if (NativeLib.load() && NativePixelOps.isAvailable) {
+        if (config.preferNative && NativeLib.load() && NativePixelOps.isAvailable) {
             try {
                 return NativePixelOps.floodFill(pixels, width, height, x, y, replacement, tolerance)
             } catch (error: UnsatisfiedLinkError) {

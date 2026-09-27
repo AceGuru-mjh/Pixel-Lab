@@ -107,12 +107,14 @@ data class HistoryEntry(
  * val restored = history.undo(project)   // == p0 because project == p1
  * ```
  *
- * ### Position accounting
- * Internally the stack maintains an integer *position*: it advances on
- * every committed entry (record/redo) and retreats on every undo. The save
- * point is simply the position captured by [markSaved]; [isModified] is
- * `position != savePoint`. Coalesced records do not advance the position
- * because they extend the existing top entry rather than adding one.
+ * ### Dirty tracking
+ * The save point is a *state anchor*, not a position number: [markSaved]
+ * captures the document instance the editor holds right now, and
+ * [isModified] content-compares the current document against that snapshot.
+ * Position arithmetic alone cannot answer "does the file differ from disk":
+ * undo followed by a new record returns the stack to the same depth while
+ * the document has moved to a different branch — the historical position
+ * counter reported `false` there and editors silently dropped work.
  */
 class CommandHistory(private val limit: Int = 64) {
 
@@ -129,11 +131,19 @@ class CommandHistory(private val limit: Int = 64) {
     /** Listener invoked after every structural change; single slot, see [onChanged]. */
     private var listener: (() -> Unit)? = null
 
-    /** Number of committed entries at "now"; see the class KDoc. */
+    /** Number of committed entries at "now"; used for stack bookkeeping. */
     private var position: Int = 0
 
-    /** Position captured by the last [markSaved]; starts at 0 (clean). */
-    private var savedPosition: Int = 0
+    /**
+     * Document state captured by the last [markSaved] (null = never saved,
+     * which is pristine by convention). Identity + content compared in
+     * [isModified].
+     */
+    private var savedState: SpriteProject? = null
+
+    /** The document the editor currently holds, mirrored from every
+     * record/undo/redo call so [isModified] can compare without arguments. */
+    private var currentState: SpriteProject? = null
 
     /** True when [undo] can run right now (at least one committed entry). */
     val canUndo: Boolean get() = undoStack.isNotEmpty()
@@ -142,12 +152,22 @@ class CommandHistory(private val limit: Int = 64) {
     val canRedo: Boolean get() = redoStack.isNotEmpty()
 
     /**
-     * True when the current project state differs from the save point.
-     * Starts `false`, flips to `true` on the first effective record after
-     * [markSaved] (or before any save), returns to `false` when undo/redo
-     * walk the timeline back onto the saved position.
+     * True when the current document differs from the saved snapshot.
+     * The comparison is reference-first (the hot path: an untouched editor
+     * asks this every frame) with a deep content fallback so that undoing
+     * back to an equal-but-distinct instance still counts as clean. An
+     * evicted save point (see [record]) keeps reporting `true`: the saved
+     * state is no longer reachable through undo, which is the honest
+     * answer, and the position shortcut of the past would have claimed
+     * `false` after a diverging undo-then-record pair.
      */
-    val isModified: Boolean get() = position != savedPosition
+    val isModified: Boolean
+        get() {
+            val saved = savedState ?: return false
+            val current = currentState ?: return false
+            if (current === saved) return false
+            return current != saved
+        }
 
     /**
      * Records a state transition.
@@ -170,7 +190,11 @@ class CommandHistory(private val limit: Int = 64) {
      *   no longer reachable exactly.
      */
     fun record(command: EditorCommand, before: SpriteProject, after: SpriteProject) {
-        if (before == after) return
+        if (before == after) {
+            currentState = before
+            return
+        }
+        currentState = after
         val key = command.coalesceKey
         val top = undoStack.lastOrNull()
         if (key != null && top != null && top.command.coalesceKey == key) {
@@ -186,7 +210,9 @@ class CommandHistory(private val limit: Int = 64) {
         while (undoStack.size > limit) {
             undoStack.removeFirst()
             position -= 1
-            if (savedPosition > position) savedPosition = position
+            // The save state itself is a snapshot reference, so eviction
+            // cannot strand it — isModified simply keeps answering true
+            // (the saved state is no longer reachable through undo).
         }
         notifyChanged()
     }
@@ -207,6 +233,7 @@ class CommandHistory(private val limit: Int = 64) {
         undoStack.removeLast()
         redoStack.addLast(top)
         position -= 1
+        currentState = top.before
         notifyChanged()
         return top.before
     }
@@ -225,6 +252,7 @@ class CommandHistory(private val limit: Int = 64) {
         redoStack.removeLast()
         undoStack.addLast(top)
         position += 1
+        currentState = top.after
         notifyChanged()
         return top.after
     }
@@ -244,11 +272,14 @@ class CommandHistory(private val limit: Int = 64) {
     fun redoDepth(): Int = redoStack.size
 
     /**
-     * Marks the *current* timeline position as the save point:
-     * [isModified] becomes `false` until the position moves again.
+     * Anchors the save point to the document the editor holds *right now*:
+     * [isModified] becomes `false` until the document content actually
+     * diverges from this snapshot — including the case where undo walks back
+     * onto an equal state, and *excluding* the old false-clean after a
+     * diverging undo-then-record pair (same position, different state).
      */
     fun markSaved() {
-        savedPosition = position
+        savedState = currentState
     }
 
     /**
@@ -264,7 +295,7 @@ class CommandHistory(private val limit: Int = 64) {
 
     /**
      * Forgets the whole timeline: undo and redo stacks are dropped and the
-     * save point resets to *now* (the current project state becomes the new
+     * save point resets to *now* (the current document becomes the new
      * baseline, so [isModified] is `false` immediately after). Callers that
      * care about unsaved work should persist before clearing.
      */
@@ -272,7 +303,7 @@ class CommandHistory(private val limit: Int = 64) {
         undoStack.clear()
         redoStack.clear()
         position = 0
-        savedPosition = 0
+        savedState = currentState
         notifyChanged()
     }
 
@@ -361,7 +392,9 @@ class HistoryTransaction(private val label: String) {
      * `before` and [final] the last step's `after` — this catches the
      * off-by-one mistake of passing a mid-transaction state as the outer
      * boundary. With no collected steps the transaction records the raw
-     * `initial -> final` transition (still a legal single entry).
+     * `initial -> final` transition (a legal single entry; the historical
+     * implementation demanded `initial == final` here, contradicting this
+     * documentation).
      *
      * Like [CommandHistory.record], a no-op (`initial == final` with nothing
      * effective inside) records nothing at all.
@@ -371,9 +404,8 @@ class HistoryTransaction(private val label: String) {
      */
     fun commit(history: CommandHistory, initial: SpriteProject, final: SpriteProject) {
         if (collected.isEmpty()) {
-            require(initial == final) {
-                "Transaction '$label': collected no steps, so initial and final state must be equal"
-            }
+            if (initial == final) return
+            history.record(GroupedCommand(label, emptyList()), initial, final)
             return
         }
         val first = collected.first()

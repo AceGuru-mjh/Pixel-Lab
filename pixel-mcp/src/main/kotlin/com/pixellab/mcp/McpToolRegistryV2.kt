@@ -1195,6 +1195,11 @@ object McpToolRegistryV2 {
                     store.update(it.id, project)
                 }
             }
+            // Load boundary: the wire document carries the project's id, so
+            // loading the same text into two sessions (or twice into one)
+            // would otherwise share ONE engine undo stack and cross-pollute
+            // unrelated edits — clear whatever history the id accumulated.
+            lab.engine.clearHistory(project.id)
             projectSummary(session, project).toMutable().put("loaded", true).build()
         }
 

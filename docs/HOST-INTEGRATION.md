@@ -38,7 +38,7 @@ fun providePixelLab(): PixelLab = PixelLab.create(
 val server = PixelMcpServer(
     persistenceRoot = File(context.filesDir, "pixel-lab"),  // 可选：会话持久化
 )
-val handle = server.start(8901)                    // streamable HTTP: POST /mcp（别名 /messages）
+val handle = server.start(8901)                    // handle.authToken = 本次启动的 Bearer token
 // 可选 WebSocket 通道（同一路由/会话存储）：
 val handle = server.start(8901, websocketPort = 8902)
 // 宿主用现成 mcp_connect HTTP/SSE 传输接入，174 个工具即刻可用
@@ -48,7 +48,7 @@ val handle = server.start(8901, websocketPort = 8902)
 持久化目录与画廊共用、可一键启停——同机两 App 场景开箱即用，
 `host-integration/` 目录有 30 秒接入指引与配置片段。
 
-零外部依赖（java.net.ServerSocket + 手写 HTTP/SSE/WS/JSON），不会与宿主 OkHttp/Ktor 版本冲突。请求体同时支持 `Content-Length` 与 `Transfer-Encoding: chunked`；SSE 流每 15 s 推送 keepalive 注释帧防止代理回收。工具输出纪律：图像数据只返回字节数与摘要，**绝不返回 base64 大图**（宿主 ToolOutputTruncator 头 1200 + 尾 600 字符截断）。
+零外部依赖（java.net.ServerSocket + 手写 HTTP/SSE/WS/JSON），不会与宿主 OkHttp/Ktor 版本冲突。请求体同时支持 `Content-Length` 与 `Transfer-Encoding: chunked`（上限 8 MB，增量分配）；SSE 流每 15 s 推送 keepalive 注释帧防止代理回收，客户端写队列有界——慢消费者被断开而非阻塞服务。**鉴权**：每次 start 生成 256 位随机 Bearer token（`handle.authToken`），所有请求必须携带 `Authorization: Bearer <token>`，POST 还必须是 `application/json`（封死浏览器 `text/plain` 简单请求 CSRF）。工具输出纪律：导出产物 2 MB 内联 `data_b64`（供闭环再导入），超限只返回 byte_count + 落盘建议（宿主 ToolOutputTruncator 头 1200 + 尾 600 字符截断）。
 
 ### 工具分层（`tools/list` 里的 `tier` 字段）
 

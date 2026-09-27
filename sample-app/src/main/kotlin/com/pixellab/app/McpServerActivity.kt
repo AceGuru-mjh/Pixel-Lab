@@ -241,9 +241,29 @@ fun McpServerPanel(
                         Icon(Icons.Filled.ContentCopy, contentDescription = "Copy URL")
                     }
                 }
+                // Bearer token: regenerated on every start, so the agent
+                // connection config must be re-supplied after each boot.
+                val token = serverAccessor()?.authToken
+                if (running && token != null) {
+                    Text(
+                        "Every request must carry the Authorization header generated at start:",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Authorization: Bearer $token",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { clipboard.setText(AnnotatedString(token)) }) {
+                            Icon(Icons.Filled.ContentCopy, contentDescription = "Copy auth token")
+                        }
+                    }
+                }
                 Text(
                     "Example chat prompt for the agent: “连接 MCP 服务器 " + url +
-                        " 然后列出可用工具”.",
+                        "（请求头带 Authorization: Bearer <token>）然后列出可用工具”.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

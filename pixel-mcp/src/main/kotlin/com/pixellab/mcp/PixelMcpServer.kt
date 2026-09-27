@@ -72,8 +72,13 @@ class PixelMcpServer(
     /** Tool identity exposed by [listTools]: name, description, category, tier. */
     data class McpToolInfo(val name: String, val description: String, val category: String, val tier: Int)
 
-    /** Start receipt: the bound ports and the wall-clock start time. */
-    data class PixelMcpHandle(val port: Int, val websocketPort: Int?, val startedAtMs: Long)
+    /**
+     * Start receipt: the bound ports, the wall-clock start time and the
+     * generated bearer token. Hosts hand the token to their MCP client out
+     * of band — every request must carry `Authorization: Bearer <token>`
+     * (see [HttpSseServer] for why loopback binding alone is not isolation).
+     */
+    data class PixelMcpHandle(val port: Int, val websocketPort: Int?, val startedAtMs: Long, val authToken: String)
 
     private val lab: PixelLab = PixelLab.create(config)
     private val persistence: McpPersistence? = persistenceRoot?.let { root ->
@@ -87,10 +92,17 @@ class PixelMcpServer(
         onProjectDiscarded = { projectId -> lab.engine.clearHistory(projectId) },
         onSessionDiscarded = { sessionId -> router.clearSessionState(sessionId) },
     )
-    private val transport: HttpSseServer = HttpSseServer { body, respond -> handleMessage(body, respond) }
-    private var websockets: WebSocketServer? = null
     private val stateLock = Any()
     private var handle: PixelMcpHandle? = null
+
+    /** Bearer token generated per start; null while stopped. */
+    val authToken: String?
+        get() = synchronized(stateLock) { handle?.authToken }
+
+    private val transport: HttpSseServer = HttpSseServer(
+        onMessage = { body, respond -> handleMessage(body, respond) },
+    )
+    private var websockets: WebSocketServer? = null
 
     /**
      * Starts the HTTP+SSE transport listening on [port] (0 = ephemeral
@@ -103,10 +115,13 @@ class PixelMcpServer(
     fun start(port: Int, websocketPort: Int? = null): PixelMcpHandle {
         synchronized(stateLock) {
             handle?.let { throw IllegalStateException("PixelMcpServer is already running on port ${it.port}") }
-            transport.start(port)
+            // Fresh bearer token per start: leaked tokens die with their
+            // server lifetime, and restarts invalidate old ones implicitly.
+            val token = freshToken()
+            transport.start(port, token)
             val boundPort = transport.port ?: port
             val boundWsPort = try {
-                websocketPort?.let { bootWebSocket(it) }
+                websocketPort?.let { bootWebSocket(it, token) }
             } catch (error: Exception) {
                 // Partial-failure rollback: with the HTTP transport up and
                 // the WS bind failing, leaving handle null would make
@@ -116,7 +131,7 @@ class PixelMcpServer(
                 transport.stop()
                 throw error
             }
-            val started = PixelMcpHandle(boundPort, boundWsPort, System.currentTimeMillis())
+            val started = PixelMcpHandle(boundPort, boundWsPort, System.currentTimeMillis(), token)
             handle = started
             config.effectiveLogger.i(
                 TAG,
@@ -127,7 +142,7 @@ class PixelMcpServer(
     }
 
     /** Boots the WebSocket transport bridged onto the shared JSON-RPC router. */
-    private fun bootWebSocket(port: Int): Int {
+    private fun bootWebSocket(port: Int, token: String): Int {
         val server = WebSocketServer(
             port,
             handler = { body ->
@@ -138,9 +153,19 @@ class PixelMcpServer(
                 reply.singleOrNull()
             },
             logger = { line -> config.effectiveLogger.d(TAG, "ws: $line") },
+            authToken = token,
         )
         websockets = server
         return server.port
+    }
+
+    /** Cryptographically random bearer token (256 bits, hex). */
+    private fun freshToken(): String {
+        val bytes = ByteArray(32)
+        java.security.SecureRandom().nextBytes(bytes)
+        val hex = StringBuilder(64)
+        for (b in bytes) hex.append(((b.toInt() shr 4) and 0xF).toString(16)).append((b.toInt() and 0xF).toString(16))
+        return hex.toString()
     }
 
     /** Stops the server and drops all sessions; safe to call repeatedly. */

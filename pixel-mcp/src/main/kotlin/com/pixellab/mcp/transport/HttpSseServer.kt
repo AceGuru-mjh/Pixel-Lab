@@ -35,18 +35,55 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    string produces a body-less `202 Accepted` (used for notifications).
  *  * Anything else — `404` (unknown path) or `400` (malformed request).
  *
- * The socket accept loop and every connection handler run on [Dispatchers.IO]
- * through a [SupervisorJob] scope, so one slow client never fails the others.
+ * ## Access control
+ *
+ * Loopback binding alone does not isolate an Android app: every other app
+ * on the device shares 127.0.0.1, and a browser page can fire a
+ * `Content-Type: text/plain` simple request at it cross-origin. When
+ * [authToken] is non-null every request must carry
+ * `Authorization: Bearer <token>` and POSTs must declare
+ * `Content-Type: application/json` — anything else answers `401`. The host
+ * generates the token at start and hands it to its MCP client out of band.
+ *
+ * ## Resource discipline
+ *
+ *  * Bodies are read incrementally with an 8 MB cap (no up-front
+ *    allocation of the declared size).
+ *  * Total in-flight connections are capped; the accept loop runs on its
+ *    own thread so the shared IO pool can never starve it.
+ *  * SSE clients write through bounded queues on dedicated writer threads —
+ *    a client that stops reading is dropped, never allowed to block the
+ *    request path (the historical synchronous flush could wedge the whole
+ *    server behind one full TCP window).
+ *
  * [stop] is idempotent: it closes the listening socket, cancels the scope and
  * shuts every SSE stream down.
  */
 class HttpSseServer(
     private val onMessage: suspend (body: String, respond: (String) -> Unit) -> Unit,
+    /**
+     * Initial bearer token requirement, or null to accept unauthenticated
+     * requests. [start] accepts a fresh token per lifetime (the server
+     * instance survives stop/start cycles).
+     */
+    authToken: String? = null,
 ) {
 
-    /** One registered SSE client: its socket, stream and write lock. */
-    private class SseClient(val socket: Socket, val out: OutputStream) {
-        val writeLock = Any()
+    /** Current bearer requirement; null accepts unauthenticated requests. */
+    @Volatile
+    private var authToken: String? = authToken
+
+    /**
+     * One registered SSE client: a bounded send queue drained by a dedicated
+     * writer thread. Producers never touch the socket; a full queue or a
+     * failed write drops the client.
+     */
+    private class SseClient(val socket: Socket) {
+        /** Bounded frame queue drained by the writer thread. */
+        val queue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(SSE_QUEUE_CAPACITY)
+
+        /** Set when the client is dropped; the writer thread exits on it. */
+        val dead = java.util.concurrent.atomic.AtomicBoolean(false)
     }
 
     private companion object {
@@ -59,14 +96,29 @@ class HttpSseServer(
         /** Upper bound for header count per request. */
         private const val MAX_HEADERS: Int = 64
 
-        /** Upper bound for a request body (pixel arrays can be sizable). */
-        private const val MAX_BODY_BYTES: Int = 32 * 1024 * 1024
+        /**
+         * Upper bound for one request body (pixel arrays can be sizable).
+         * 8 MB: the MCP layer caps inline pixel payloads at 4 M entries and
+         * image bytes at 2 MB, so legitimate traffic stays far below; the
+         * historical 32 MB pre-allocation was ~6 concurrent requests away
+         * from killing an Android app heap before a single byte arrived.
+         */
+        private const val MAX_BODY_BYTES: Int = 8 * 1024 * 1024
 
         /** Read timeout while receiving the request head (ms). */
         private const val HEAD_TIMEOUT_MS: Int = 30_000
 
         /** Hard cap on simultaneously registered SSE clients. */
         private const val MAX_SSE_CLIENTS: Int = 32
+
+        /** Bounded SSE send queue depth per client (frames). */
+        private const val SSE_QUEUE_CAPACITY: Int = 128
+
+        /** Hard cap on total in-flight connections (SSE + POST). */
+        private const val MAX_CONNECTIONS: Int = 128
+
+        /** Maximum trailer lines after the terminal chunk. */
+        private const val MAX_TRAILER_LINES: Int = 64
 
         /** Idle SSE heartbeat interval (ms) keeping streams open across proxies. */
         private const val SSE_HEARTBEAT_MS: Long = 15_000
@@ -75,18 +127,38 @@ class HttpSseServer(
     private var serverSocket: ServerSocket? = null
     private var scope: CoroutineScope? = null
     private val clients = CopyOnWriteArrayList<SseClient>()
+
+    @Volatile
     private var running = false
 
-    /** Starts listening on [port] (0 = pick a free ephemeral port). */
-    fun start(port: Int) {
+    /** In-flight connections (SSE + request handlers), for the global cap. */
+    private val liveConnections = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Dedicated accept thread: immune to IO-pool starvation. */
+    private var acceptThread: Thread? = null
+
+    /**
+     * Starts listening on [port] (0 = pick a free ephemeral port). A non-null
+     * [token] replaces the auth requirement for this lifetime (null keeps
+     * the constructor's setting).
+     */
+    fun start(port: Int, token: String? = null) {
         synchronized(LOCK) {
             if (running) throw IllegalStateException("HttpSseServer is already running on port ${currentPort()}")
+            if (token != null) authToken = token
             val socket = ServerSocket(port, 64, InetAddress.getLoopbackAddress())
             serverSocket = socket
             running = true
             val serverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             scope = serverScope
-            serverScope.launch { acceptLoop(socket) }
+            // A dedicated accept thread cannot be starved by connection
+            // handlers occupying every Dispatchers.IO thread (the shared
+            // pool tops out at 64; 65 slow connections used to wedge the
+            // accept loop itself).
+            acceptThread = Thread({ acceptLoop(socket) }, "http-sse-accept").apply {
+                isDaemon = true
+                start()
+            }
         }
     }
 
@@ -99,8 +171,9 @@ class HttpSseServer(
             scope = null
             closeQuietly(serverSocket)
             serverSocket = null
+            acceptThread = null
             for (client in clients) {
-                closeQuietly(client.socket)
+                killClient(client)
             }
             clients.clear()
         }
@@ -118,8 +191,14 @@ class HttpSseServer(
     /**
      * Pushes an SSE frame `event: [event]` + `data: [data]` to every live
      * client. Multi-line [data] is split across consecutive `data:` lines as
-     * required by the SSE framing. Clients whose stream rejects the write are
-     * dropped and their sockets closed.
+     * required by the SSE framing.
+     *
+     * The write is *queued*, never blocking: each client's dedicated writer
+     * thread drains its bounded queue, and a client whose queue is full (it
+     * stopped reading) or whose socket rejects the write is dropped. The
+     * request path can therefore never stall behind a slow SSE consumer —
+     * the historical synchronous flush held the POST handler's thread until
+     * the client's TCP window drained.
      */
     fun sendEvent(event: String, data: String) {
         val frame = buildString {
@@ -130,38 +209,62 @@ class HttpSseServer(
             append('\n')
         }.toByteArray(StandardCharsets.UTF_8)
         for (client in clients) {
-            val ok = try {
-                synchronized(client.writeLock) {
-                    client.out.write(frame)
-                    client.out.flush()
-                }
-                true
-            } catch (error: IOException) {
-                false
-            }
-            if (!ok) dropClient(client)
+            enqueueFrame(client, frame)
+        }
+    }
+
+    /** Offers [frame] to [client]'s queue; drops the client when full or dead. */
+    private fun enqueueFrame(client: SseClient, frame: ByteArray) {
+        if (client.dead.get()) return
+        if (!client.queue.offer(frame)) {
+            killClient(client)
+        }
+    }
+
+    /** Marks the client dead, removes it and closes its socket + writer. */
+    private fun killClient(client: SseClient) {
+        if (client.dead.compareAndSet(false, true)) {
+            clients.remove(client)
+            client.queue.clear()
+            closeQuietly(client.socket)
         }
     }
 
     // ---- accept loop ------------------------------------------------------
 
-    private suspend fun acceptLoop(socket: ServerSocket) {
-        while (true) {
+    private fun acceptLoop(socket: ServerSocket) {
+        while (running) {
             val client = try {
                 socket.accept()
             } catch (error: IOException) {
                 break // listening socket closed by stop()
             }
-            // Between stop() cancelling the scope and the accept throwing,
-            // one more connection can slip through: a null/cancelled scope
-            // makes this launch a no-op and the accepted socket would never
-            // be closed (leaked FD). Guard both sides.
-            val active = scope?.takeIf { it.isActive }
-            if (active == null) {
+            // Global cap: counts SSE streams and one-shot requests alike;
+            // over-cap sockets are closed immediately so slow-connection
+            // floods cannot occupy unbounded threads.
+            if (liveConnections.incrementAndGet() > MAX_CONNECTIONS) {
+                liveConnections.decrementAndGet()
                 closeQuietly(client)
                 continue
             }
-            active.launch { handleConnection(client) }
+            // Between stop() cancelling the scope and the accept throwing,
+            // one more connection can slip through: a null/cancelled scope
+            // makes this launch a no-op and the accepted socket would never
+            // be closed (leaked FD). The launch body's finally decrements
+            // the live-connection counter either way.
+            val active = scope?.takeIf { it.isActive }
+            if (active == null) {
+                liveConnections.decrementAndGet()
+                closeQuietly(client)
+                continue
+            }
+            active.launch {
+                try {
+                    handleConnection(client)
+                } finally {
+                    liveConnections.decrementAndGet()
+                }
+            }
         }
     }
 
@@ -173,8 +276,11 @@ class HttpSseServer(
             socket.tcpNoDelay = true
             val input = BufferedInputStream(socket.getInputStream())
             val requestLine = readLine(input) ?: return // client hung up immediately
-            val parts = requestLine.trim().split(" ")
-            if (parts.size < 2) {
+            // Exactly three tokens and a known HTTP version: HTTP/0.9-style
+            // two-token requests and unknown versions used to be served as
+            // 1.1 silently.
+            val parts = requestLine.trim().split(" +".toRegex())
+            if (parts.size != 3 || (parts[2] != "HTTP/1.0" && parts[2] != "HTTP/1.1")) {
                 writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
                 return
             }
@@ -182,6 +288,13 @@ class HttpSseServer(
             val path = parts[1].substringBefore('?')
             val headers = readHeaders(input) ?: run {
                 writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
+                return
+            }
+            // Bearer-token gate (see the class KDoc): without it every app
+            // on the device shares 127.0.0.1 and browser pages reach the
+            // server through text/plain simple requests.
+            if (!authorized(headers)) {
+                writeStatus(socket, 401, "{\"error\":\"unauthorized\"}")
                 return
             }
             when {
@@ -200,9 +313,34 @@ class HttpSseServer(
             } catch (ignored: IOException) {
                 // Socket already unusable.
             }
+        } catch (error: Throwable) {
+            // OOM and friends must not ride a connection handler into the
+            // process default handler; the connection dies, the server
+            // lives. Memory pressure here means a request hit a path the
+            // size caps did not cover — 500 over a dropped socket.
+            try {
+                writeStatus(socket, 500, "{\"error\":\"internal_error\"}")
+            } catch (ignored: IOException) {
+                // Socket already unusable.
+            }
         } finally {
             if (!isSseSocket(socket)) closeQuietly(socket)
         }
+    }
+
+    /** Bearer-token + (for POSTs) JSON content-type check. */
+    private fun authorized(headers: Map<String, String>): Boolean {
+        val token = authToken ?: return true
+        val header = headers["authorization"] ?: return false
+        val expected = "Bearer $token"
+        return header.length == expected.length && constantTimeEquals(header, expected)
+    }
+
+    /** Comparison independent of the matching-prefix length. */
+    private fun constantTimeEquals(a: String, b: String): Boolean {
+        var diff = 0
+        for (i in a.indices) diff = diff or (a[i].code xor b[i].code)
+        return diff == 0
     }
 
     /** Reads the header block; null signals a malformed request. */
@@ -221,16 +359,33 @@ class HttpSseServer(
 
     /** POST /messages (and /mcp): body in, JSON-RPC response out (HTTP + SSE). */
     private suspend fun handlePost(socket: Socket, input: InputStream, headers: Map<String, String>) {
+        // CSRF defense: a browser "simple request" carries text/plain and
+        // skips the CORS preflight entirely; only application/json is
+        // accepted. MCP clients always send JSON.
+        val contentType = headers["content-type"]
+        if (contentType == null || !contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)) {
+            writeStatus(socket, 415, "{\"error\":\"unsupported_media_type\"}")
+            return
+        }
         val body: String
         val chunked = headers["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true
-        val length = headers["content-length"]?.toIntOrNull() ?: 0
+        val rawLength = headers["content-length"]
         if (chunked) {
+            honorExpect100Continue(socket, headers)
             body = readChunkedBody(input) ?: run {
                 writeStatus(socket, 400, "{\"error\":\"bad_chunked_body\"}")
                 return
             }
         } else {
-            if (length < 0 || length > MAX_BODY_BYTES) {
+            // RFC 9112 §6.3: a malformed or duplicated disagreeing
+            // Content-Length must be rejected, not silently treated as 0
+            // (which swallowed the request body).
+            if (rawLength == null) {
+                writeStatus(socket, 411, "{\"error\":\"length_required\"}")
+                return
+            }
+            val length = rawLength.trim().toIntOrNull()
+            if (length == null || length < 0 || length > MAX_BODY_BYTES) {
                 writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
                 return
             }
@@ -272,13 +427,14 @@ class HttpSseServer(
 
     /** GET /sse: emit the stream head, register the client, hold until disconnect. */
     private suspend fun handleSse(socket: Socket, input: InputStream) {
-        // Registration and cap check happen under one lock: a check-then-add
-        // gap would let a burst of concurrent GETs register past the cap.
+        // Registration, cap check AND a running re-check happen under one
+        // lock: a stop() racing this registration used to leave a zombie
+        // SSE client reading forever on a socket nobody owned.
         val registered = synchronized(LOCK) {
-            if (clients.size >= MAX_SSE_CLIENTS) {
+            if (!running || clients.size >= MAX_SSE_CLIENTS) {
                 null
             } else {
-                SseClient(socket, BufferedOutputStream(socket.getOutputStream())).also { clients.add(it) }
+                SseClient(socket).also { clients.add(it) }
             }
         }
         if (registered == null) {
@@ -286,75 +442,60 @@ class HttpSseServer(
             closeQuietly(socket)
             return
         }
-        socket.soTimeout = 0
-        val out = registered.out
-        try {
-            out.write(
-                (
-                    "HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: text/event-stream\r\n" +
-                        "Cache-Control: no-cache\r\n" +
-                        "Connection: keep-alive\r\n\r\n"
-                    ).toByteArray(StandardCharsets.UTF_8),
-            )
-            out.flush()
-        } catch (error: IOException) {
-            dropClient(registered)
-            closeQuietly(socket)
-            return
-        }
         val client = registered
-        pushToOne(client, "endpoint", "/messages")
+        socket.soTimeout = 0
+        // Dedicated writer thread drains the bounded queue; write failures
+        // (client gone, TCP window full) kill the client instead of ever
+        // blocking a producer.
+        Thread({
+            val out = BufferedOutputStream(socket.getOutputStream())
+            try {
+                out.write(
+                    (
+                        "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/event-stream\r\n" +
+                            "Cache-Control: no-cache\r\n" +
+                            "Connection: keep-alive\r\n\r\n"
+                        ).toByteArray(StandardCharsets.UTF_8),
+                )
+                out.flush()
+                while (true) {
+                    val frame = client.queue.poll(1, java.util.concurrent.TimeUnit.SECONDS)
+                    if (frame != null) {
+                        out.write(frame)
+                        out.flush()
+                    }
+                    if (client.dead.get()) break
+                }
+            } catch (error: InterruptedException) {
+                // stop() or killClient interrupted the drain.
+            } catch (error: IOException) {
+                killClient(client)
+            }
+        }, "sse-writer").apply {
+            isDaemon = true
+            start()
+        }
+        enqueueFrame(client, "event: endpoint\ndata: /messages\n\n".toByteArray(StandardCharsets.UTF_8))
         // Hold the stream open until the client disconnects; discards any bytes.
         val heartbeat = scope?.launch {
             while (running) {
                 kotlinx.coroutines.delay(SSE_HEARTBEAT_MS)
                 // Idle comment frame keeps intermediaries from reaping the stream.
-                if (client in clients) pushComment(client)
+                if (!client.dead.get()) enqueueFrame(client, ": keepalive\n\n".toByteArray(StandardCharsets.UTF_8))
             }
         }
         try {
             val discard = ByteArray(1024)
-            while (running && input.read(discard) != -1) {
+            while (running && !client.dead.get() && input.read(discard) != -1) {
                 // Client input is ignored; the read only detects disconnects.
             }
         } catch (error: IOException) {
             // Disconnect: fall through to cleanup.
         } finally {
             heartbeat?.cancel()
-            dropClient(client)
+            killClient(client)
         }
-    }
-
-    /** Writes one SSE comment frame (`: keepalive`) to [client]. */
-    private fun pushComment(client: SseClient) {
-        try {
-            synchronized(client.writeLock) {
-                client.out.write(": keepalive\n\n".toByteArray(StandardCharsets.UTF_8))
-                client.out.flush()
-            }
-        } catch (error: IOException) {
-            dropClient(client)
-        }
-    }
-
-    /** Writes a single SSE frame to one client, dropping it on failure. */
-    private fun pushToOne(client: SseClient, event: String, data: String) {
-        val frame = "event: $event\ndata: $data\n\n".toByteArray(StandardCharsets.UTF_8)
-        try {
-            synchronized(client.writeLock) {
-                client.out.write(frame)
-                client.out.flush()
-            }
-        } catch (error: IOException) {
-            dropClient(client)
-        }
-    }
-
-    /** Removes a client from the registry and closes its socket. */
-    private fun dropClient(client: SseClient) {
-        clients.remove(client)
-        closeQuietly(client.socket)
     }
 
     /** True while [socket] is still owned by a registered SSE client. */
@@ -385,7 +526,11 @@ class HttpSseServer(
             200 -> "OK"
             202 -> "Accepted"
             400 -> "Bad Request"
+            401 -> "Unauthorized"
             404 -> "Not Found"
+            411 -> "Length Required"
+            415 -> "Unsupported Media Type"
+            500 -> "Internal Server Error"
             503 -> "Service Unavailable"
             else -> "Error"
         }
@@ -402,33 +547,52 @@ class HttpSseServer(
         }
     }
 
-    /** Reads one CRLF/LF-terminated line (UTF-8); null on EOF or oversized line. */
+    /**
+     * Reads one CRLF/LF-terminated line (UTF-8); null on EOF or oversized
+     * line. A CR is only legal immediately before the LF terminator — a CR
+     * anywhere else (the classic `Content-Length: 2\r6` request-smuggling
+     * primitive) fails the line.
+     */
     private fun readLine(input: InputStream): String? {
         var bytes = ByteArray(128)
         var count = 0
+        var sawCr = false
         while (true) {
             val b = input.read()
             if (b == -1) return null
             if (b == '\n'.code) break
-            if (b != '\r'.code) {
-                if (count >= MAX_LINE_BYTES) return null
-                if (count == bytes.size) bytes = bytes.copyOf(bytes.size * 2)
-                bytes[count++] = b.toByte()
+            if (b == '\r'.code) {
+                if (sawCr) return null // CR CR — only one terminator CR is legal
+                sawCr = true
+                continue
             }
+            if (sawCr) return null // CR followed by something other than LF
+            if (count >= MAX_LINE_BYTES) return null
+            if (count == bytes.size) bytes = bytes.copyOf(bytes.size * 2)
+            bytes[count++] = b.toByte()
         }
         return String(bytes, 0, count, StandardCharsets.UTF_8)
     }
 
-    /** Reads exactly [length] bytes; null when the stream ends early. */
+    /**
+     * Reads exactly [length] bytes; null when the stream ends early.
+     *
+     * The buffer grows with the bytes that actually arrive (doubling, capped
+     * at [MAX_BODY_BYTES]) — a `Content-Length: 8388608` header followed by
+     * nothing used to allocate the full 8 MB before the first read.
+     * Malformed UTF-8 fails the body rather than silently decoding to
+     * U+FFFD replacement characters.
+     */
     private fun readBody(input: InputStream, length: Int): String? {
-        val bytes = ByteArray(length)
-        var offset = 0
-        while (offset < length) {
-            val read = input.read(bytes, offset, length - offset)
-            if (read == -1) return null
-            offset += read
+        val raw = readBodyBytes(input, length) ?: return null
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        return try {
+            decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString()
+        } catch (error: java.nio.charset.CharacterCodingException) {
+            null
         }
-        return String(bytes, StandardCharsets.UTF_8)
     }
 
     /**
@@ -449,10 +613,14 @@ class HttpSseServer(
             // Exception-based connection guard — a one-request DoS).
             if (size < 0 || out.size().toLong() + size.toLong() > MAX_BODY_BYTES) return null
             if (size == 0) {
-                // Trailer section: consume lines until the blank terminator.
+                // Trailer section: consume lines until the blank terminator,
+                // bounded — an attacker drip-feeding one trailer line per
+                // 29 s used to pin the connection thread forever.
+                var trailerLines = 0
                 while (true) {
                     val trailer = readLine(input) ?: return null
                     if (trailer.isEmpty()) break
+                    if (++trailerLines > MAX_TRAILER_LINES) return null
                 }
                 return out.toString("UTF-8")
             }
@@ -463,14 +631,17 @@ class HttpSseServer(
         }
     }
 
-    /** Reads exactly [length] raw bytes; null when the stream ends early. */
+    /** Reads exactly [length] raw bytes, allocating incrementally; null on early EOF. */
     private fun readBodyBytes(input: InputStream, length: Int): ByteArray? {
-        val bytes = ByteArray(length)
+        var bytes = ByteArray(minOf(length, 64 * 1024))
         var offset = 0
         while (offset < length) {
-            val read = input.read(bytes, offset, length - offset)
+            val read = input.read(bytes, offset, bytes.size - offset)
             if (read == -1) return null
             offset += read
+            if (offset == bytes.size && offset < length) {
+                bytes = bytes.copyOf(minOf(bytes.size.toLong() * 2, length.toLong()).toInt())
+            }
         }
         return bytes
     }

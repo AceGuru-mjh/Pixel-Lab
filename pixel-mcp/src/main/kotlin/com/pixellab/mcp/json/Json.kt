@@ -232,6 +232,15 @@ object Json {
     /** Maximum nesting depth for both parsing and writing. */
     const val MAX_DEPTH: Int = 64
 
+    /**
+     * Maximum number of nodes (objects, arrays, values) one parsed document
+     * may contain. Depth alone does not bound memory: a depth-2 array of
+     * 16 M numbers turns 32 MB of input into ~1.3 GB of JsonNumber
+     * wrappers (~30x amplification) — enough to OOM the process before any
+     * error path runs.
+     */
+    const val MAX_NODES: Int = 200_000
+
     /** Parses [text] into a [JsonElement] tree. */
     fun parse(text: String): JsonElement {
         val parser = Parser(text)
@@ -324,6 +333,9 @@ object Json {
     private class Parser(val text: String) {
         var pos: Int = 0
 
+        /** Nodes materialized so far (the MAX_NODES budget). */
+        private var nodeCount: Int = 0
+
         fun atEnd(): Boolean = pos >= text.length
 
         fun skipWhitespace() {
@@ -337,6 +349,9 @@ object Json {
 
         fun parseValue(depth: Int): JsonElement {
             if (depth > MAX_DEPTH) throw JsonParseException("nesting deeper than $MAX_DEPTH levels")
+            if (++nodeCount > MAX_NODES) {
+                throw JsonParseException("document exceeds the $MAX_NODES-node budget")
+            }
             skipWhitespace()
             if (atEnd()) throw JsonParseException("unexpected end of input")
             return when (val c = text[pos]) {

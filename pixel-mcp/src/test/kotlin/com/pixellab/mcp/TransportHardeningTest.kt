@@ -33,11 +33,11 @@ import java.io.InputStream
  */
 class TransportHardeningTest {
 
-    /** Boots a server on an ephemeral port; returns it plus the HTTP port. */
-    private fun bootServer(): Pair<PixelMcpServer, Int> {
+    /** Boots a server on an ephemeral port; server, HTTP port and token. */
+    private fun bootServer(): Triple<PixelMcpServer, Int, String> {
         val server = PixelMcpServer()
         val handle = server.start(0)
-        return server to handle.port
+        return Triple(server, handle.port, handle.authToken)
     }
 
     /** Raw HTTP request over a fresh socket; returns status line + body. */
@@ -109,7 +109,7 @@ class TransportHardeningTest {
 
     @Test
     fun `chunked overflow header is rejected without a 2GB allocation`() {
-        val (server, port) = bootServer()
+        val (server, port, token) = bootServer()
         try {
             // 1-byte legal chunk, then a 0x7FFFFFFF chunk header: with the
             // old Int-sum bound this produced 1 + 2147483647 = overflow,
@@ -117,6 +117,7 @@ class TransportHardeningTest {
             val body = "1\r\nA\r\n7FFFFFFF\r\n"
             val request = "POST /messages HTTP/1.1\r\n" +
                 "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
                 "Content-Type: application/json\r\n" +
                 "Transfer-Encoding: chunked\r\n" +
                 "Connection: close\r\n\r\n" +
@@ -132,6 +133,7 @@ class TransportHardeningTest {
                 port,
                 "POST /messages HTTP/1.1\r\n" +
                     "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer $token\r\n" +
                     "Content-Type: application/json\r\n" +
                     "Content-Length: ${payload.toByteArray(Charsets.UTF_8).size}\r\n" +
                     "Connection: close\r\n\r\n" +
@@ -148,11 +150,12 @@ class TransportHardeningTest {
 
     @Test
     fun `error replies never echo a non-scalar id`() {
-        val (server, port) = bootServer()
+        val (server, port, token) = bootServer()
         try {
             val payload = "{\"jsonrpc\":\"1.0\",\"id\":{\"x\":1},\"method\":\"ping\"}"
             val request = "POST /messages HTTP/1.1\r\n" +
                 "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
                 "Content-Type: application/json\r\n" +
                 "Content-Length: ${payload.toByteArray(Charsets.UTF_8).size}\r\n" +
                 "Connection: close\r\n\r\n" +
@@ -172,11 +175,12 @@ class TransportHardeningTest {
 
     @Test
     fun `valid request still round trips its id`() {
-        val (server, port) = bootServer()
+        val (server, port, token) = bootServer()
         try {
             val payload = "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"tools/list\"}"
             val request = "POST /messages HTTP/1.1\r\n" +
                 "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
                 "Content-Type: application/json\r\n" +
                 "Content-Length: ${payload.toByteArray(Charsets.UTF_8).size}\r\n" +
                 "Connection: close\r\n\r\n" + payload
@@ -277,6 +281,174 @@ class TransportHardeningTest {
             }
         } finally {
             ws.close()
+        }
+    }
+
+    // ---- access control (bearer token + content type) -----------------------
+
+    @Test
+    fun `post without the bearer token is rejected with 401`() {
+        val (server, port, _) = bootServer()
+        try {
+            val payload = "{}"
+            val (status, _) = httpExchange(
+                port,
+                "POST /messages HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Content-Length: ${payload.length}\r\n" +
+                    "Connection: close\r\n\r\n" +
+                    payload,
+            )
+            assertTrue("expected 401, got '$status'", status.contains("401"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `post with a wrong bearer token is rejected with 401`() {
+        val (server, port, _) = bootServer()
+        try {
+            val payload = "{}"
+            val (status, _) = httpExchange(
+                port,
+                "POST /messages HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer deadbeef\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Content-Length: ${payload.length}\r\n" +
+                    "Connection: close\r\n\r\n" +
+                    payload,
+            )
+            assertTrue("expected 401, got '$status'", status.contains("401"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `cross-origin text plain post is rejected with 415`() {
+        // A browser "simple request" carries text/plain and bypasses the CORS
+        // preflight; before the gate it executed JSON-RPC on the device.
+        val (server, port, token) = bootServer()
+        try {
+            val payload = "{}"
+            val (status, _) = httpExchange(
+                port,
+                "POST /messages HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer $token\r\n" +
+                    "Content-Type: text/plain\r\n" +
+                    "Content-Length: ${payload.length}\r\n" +
+                    "Connection: close\r\n\r\n" +
+                    payload,
+            )
+            assertTrue("expected 415, got '$status'", status.contains("415"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `post without content length is rejected with 411`() {
+        val (server, port, token) = bootServer()
+        try {
+            val (status, _) = httpExchange(
+                port,
+                "POST /messages HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer $token\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Connection: close\r\n\r\n",
+            )
+            assertTrue("expected 411, got '$status'", status.contains("411"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    // ---- protocol strictness -----------------------------------------------
+
+    @Test
+    fun `http09 style two token request line is rejected`() {
+        val (server, port, token) = bootServer()
+        try {
+            val (status, _) = httpExchange(
+                port,
+                "GET /sse\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer $token\r\n\r\n",
+            )
+            assertTrue("expected 400, got '$status'", status.contains("400"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `header line with an internal carriage return is rejected`() {
+        // The classic request-smuggling primitive: `Content-Length: 2\r6`
+        // used to be reassembled as `26`.
+        val (server, port, token) = bootServer()
+        try {
+            val payload = "{}"
+            val (status, _) = httpExchange(
+                port,
+                "POST /messages HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer $token\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Content-Length: 2\r6\r\n" +
+                    "Connection: close\r\n\r\n" +
+                    payload,
+            )
+            assertTrue("expected 400, got '$status'", status.contains("400"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `malformed content length is rejected instead of treated as zero`() {
+        val (server, port, token) = bootServer()
+        try {
+            val payload = "{}"
+            val (status, _) = httpExchange(
+                port,
+                "POST /messages HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$port\r\n" +
+                    "Authorization: Bearer $token\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Content-Length: twelve\r\n" +
+                    "Connection: close\r\n\r\n" +
+                    payload,
+            )
+            assertTrue("expected 400, got '$status'", status.contains("400"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `oversized json node count is a parse error, not an oom`() {
+        // A depth-2 array of numbers within the 8 MB body cap used to
+        // materialize millions of JsonNumber wrappers before any guard ran.
+        val (server, port, token) = bootServer()
+        try {
+            val huge = "[" + "1,".repeat(300_000).dropLast(1) + "]"
+            val request = "POST /messages HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: ${huge.toByteArray(Charsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                huge
+            val (status, body) = httpExchange(port, request)
+            assertTrue("expected 200 with a JSON-RPC parse error, got '$status'", status.contains("200"))
+            assertTrue("body should report the parse error: $body", body.contains("-32700"))
+        } finally {
+            server.stop()
         }
     }
 

@@ -66,6 +66,7 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 - 十二个增强 PR 逐一通过行为冒烟后合并（PR7-11 冒烟合计 565 断言全绿）
 - 冒烟测试修复过的真实缺陷：JDK Inflater 零容量自旋、Aseprite 现行规范 3 处布局偏差、PixelFrame.rotated90Ccw 索引笔误
 - **本轮修复**（集成验证驱动）：①96/151 工具从未接线（tier-chain 路由器补齐）②WebSocket 传输从未启动（接入 `start(port, wsPort)`）③`100-Continue` 用 `use{}` 关闭 socket（大请求体必挂）④`width*height` Int 溢出可致 native 堆越界（Long 域校验 + 8192 边长门禁）⑤画线无界坐标 DoS（跨度上限）⑥v4 参数错误错误形状（补 -32602 映射）⑦撤销历史随会话驱逐泄漏（双回调清理）⑧native 量化丢 alpha（镜像 Kotlin 契约）⑨HTTP 不支持 chunked⑩`\u+041` 非法转义被接受
+- **第七轮（闭环+全面审计）**：六路并行审计（引擎/传输/注册表/IO/UI/闭环映射）约 150 项发现 → 5 个 PR 修复：①闭环断链全通（导出字节黑洞、导入只嗅探、文字/转换产物丢弃、调色板生成→应用、sketch_draw 幽灵工具、frame/layer_set_active 缺失）②JNI 输入别名污染/removeLayer 崩溃/脏标记丢失/checkpoint 假回滚/slot 覆盖 ③解码器统一内存预算（20KB 文件→数 GB 分配全封死）④Bearer 准入 + SSE 队列化写 + JSON 节点预算（传输层 4 项 P0）⑤UI 23 项（G 滑杆掩码/旋转丢稿/锁与对称不生效等）
 
 ## 规模与演进
 
@@ -93,7 +94,12 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #49 | **Agent 工效学（V6）**：draw_batch 验证先行批量绘制（64 op 单往返）+ 命名检查点（CheckpointTracker 深度锚/整批回滚）+ 会话持久化（SlotStore 命名槽 + ProjectStore）+ canvas_checksum FNV 指纹 + project_export_json 反向通道（总 **174** 工具）+ 45 项单测 | +2,900 行 |
 | PR #50 | **技能与宿主集成包**：3 个可导入 Android-Guru-Agent 的方法论技能（精灵设计/调色板教练/动画工作流）+ host-integration/ 30 秒接入物料（mcp-servers 配置片段）+ 样例 App MCP 服务器面板（固定端口 8901/8902 + 持久化接线 + 画廊入口） | +640 行 |
 | PR #51 | **审计加固轮**：传输/存储 12 项缺陷修复（chunked Int 溢出 DoS、WS 握手 RFC 严格化 + 连接上限 + close 码校验、SSE 注册 TOCTOU、会话存储并发语义、start 部分失败回滚、原子写窗口、meta 转义）+ draw_batch 契约修正 + CI 扩至 pixel-mcp 测试门 + 17 项回归测试（总 313） | +1,160 行 |
-| **合计** | | **57,330+ 行**（Kotlin 55,188+ + C++ 2,142+），**174 个 MCP 工具**，**313 项单测** |
+| PR #52 | **架构闭环补齐**：11 个新工具（export data_b64 / io_import_image / draw_text / sketch_draw / palette_set_colors+import / frame+layer_set_active / convert 落笔 / project_delete / checksum project 模式）+ 20 项契约修复（palette 域统一 21 板、checkpoint 错误形状、全参数上限、SKETCH 无损往返、文档真实性）+ CelStamp 合成器 + SketchParser | +1,564 行 |
+| PR #53 | **UI/UX 修复轮**：G 滑杆掩码、预览 0 尺寸、nudge 键名、快捷键冒泡（文本输入不再被劫持）、compact 滚动、图层锁/对称执行、旋转丢稿（P0）、MCP 启动容错、text: 真实落画布、主线程 IO、导出反馈 | +497 行 |
+| PR #54 | **引擎正确性**：JNI 输入缓冲别名污染（mode-0 回写改写调用方不可变帧数组）、removeLayer 单趟构造（含内容图层必抛 IAE）、isModified 状态锚、checkpoint 双锚（分叉/驱逐诚实失败）、slot 快照版本化、载入边界清历史、撤销字节预算、并发安全 | +753 行 |
+| PR #55 | **IO 解码器加固**：统一导入预算（边 16384/帧 16.7M/总量 33.5M 像素）封死 PNG/GIF/BMP/QOI/Aseprite 全部「小文件→数 GB 分配」路径 + Long 域算术 + 链式 cel 深度上限 + V4/V5 截断守卫 | +367 行 |
+| PR #56 | **传输层加固**：Bearer token 准入（401/415/411——封死 loopback 共享与 text/plain CSRF）、8MB 增量请求体、JSON 200K 节点预算、SSE 有界队列写（慢客户端断开而非挂死服务器）、专用 accept 线程 + 128 连接上限、WS 握手期上限、RFC 9112 严格化（行内 CR 走私/trailer 上限/请求行校验） | +621 行 |
+| **合计** | | **60,300+ 行**，**185 个 MCP 工具**，**374 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

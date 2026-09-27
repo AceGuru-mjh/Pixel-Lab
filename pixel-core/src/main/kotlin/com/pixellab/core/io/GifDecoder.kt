@@ -140,6 +140,11 @@ object GifDecoder {
                 "Logical screen ${logicalWidth}x${logicalHeight} has a zero axis"
             )
         }
+        // Logical screen drives the canvas allocation AND every retained
+        // frame snapshot; 65535x65535 used to overflow the Int multiply and
+        // 32768^2 used to ask for a 4.3 GB IntArray from a 13-byte header.
+        DecodeBudget.checkFrame("GIF logical screen", logicalWidth, logicalHeight) { GifDecodeException(it) }
+        var retainedPixels = 0L
         val packed = r.u8()
         val gctPresent = (packed and 0x80) != 0
         val gctSize = 2 shl (packed and 0x07)
@@ -224,6 +229,10 @@ object GifDecoder {
                             "Image Descriptor ${width}x${height} has a zero axis at offset ${r.position - 4}"
                         )
                     }
+                    // Image rasters are independent of the logical screen
+                    // (they draw clipped): 65535x65535 used to wrap the LZW
+                    // output length to a negative size.
+                    DecodeBudget.checkFrame("GIF image", width, height) { GifDecodeException(it) }
                     val imagePacked = r.u8()
                     val lctPresent = (imagePacked and 0x80) != 0
                     val interlaced = (imagePacked and 0x40) != 0
@@ -258,6 +267,9 @@ object GifDecoder {
                         ordered, width, height, left, top,
                         colors, transparentIndex, imageCount,
                     )
+                    retainedPixels = DecodeBudget.accumulate(
+                        "GIF", retainedPixels, logicalWidth.toLong() * logicalHeight,
+                    ) { GifDecodeException(it) }
                     frames.add(
                         GifFrame(
                             frame = PixelFrame.of(logicalWidth, logicalHeight, canvas.copyOf()),

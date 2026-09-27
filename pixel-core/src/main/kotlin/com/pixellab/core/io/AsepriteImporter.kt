@@ -81,6 +81,8 @@ object AsepriteImporter {
 
     /** Total file header size. */
     private const val HEADER_SIZE = 128
+    /** Linked-cel chain depth ceiling (stack-overflow guard). */
+    private const val MAX_LINK_DEPTH = 256
 
     /** Per-frame header size. */
     private const val FRAME_HEADER_SIZE = 16
@@ -175,6 +177,10 @@ object AsepriteImporter {
         if (width == 0 || height == 0) {
             throw AsepriteDecodeException("Aseprite canvas ${width}x${height} has a zero axis")
         }
+        // Import ceiling: every cel x frame materializes a canvas-sized
+        // raster, so the u16 axes must be budgeted before anything scales
+        // off them.
+        DecodeBudget.checkFrame("Aseprite canvas", width, height) { AsepriteDecodeException(it) }
         val depth = r.u16Le()
         if (depth != 32 && depth != 16) {
             throw AsepriteDecodeException("Aseprite color depth $depth unsupported (32 RGBA, 16 grayscale)")
@@ -315,8 +321,16 @@ object AsepriteImporter {
             0 -> { // raw
                 cel.width = r.u16Le()
                 cel.height = r.u16Le()
-                val bytesNeeded = cel.width * cel.height * (depth / 8)
-                cel.pixelBytes = r.bytes(bytesNeeded)
+                // Long-domain: `w * h * (depth/8)` wrapped mod 2^32 for
+                // 65535x16385@32bpp, letting a 258 KB read stand in for a
+                // 4.3 GB raster that celPixelsToArgb would allocate.
+                val bytesNeeded = cel.width.toLong() * cel.height * (depth / 8)
+                if (bytesNeeded > Int.MAX_VALUE) {
+                    throw AsepriteDecodeException(
+                        "Cel ${cel.width}x${cel.height} at depth $depth needs $bytesNeeded bytes"
+                    )
+                }
+                cel.pixelBytes = r.bytes(bytesNeeded.toInt())
             }
 
             1 -> { // linked: same pixels as (linkFrame, layerIndex)
@@ -326,8 +340,13 @@ object AsepriteImporter {
             2 -> { // compressed (zlib)
                 cel.width = r.u16Le()
                 cel.height = r.u16Le()
-                val expected = cel.width * cel.height * (depth / 8)
-                cel.pixelBytes = inflateCel(r.bytes(r.remaining()), expected, frameIndex, chunkOffset)
+                val expectedLong = cel.width.toLong() * cel.height * (depth / 8)
+                if (expectedLong > Int.MAX_VALUE) {
+                    throw AsepriteDecodeException(
+                        "Cel ${cel.width}x${cel.height} at depth $depth inflates to $expectedLong bytes"
+                    )
+                }
+                cel.pixelBytes = inflateCel(r.bytes(r.remaining()), expectedLong.toInt(), frameIndex, chunkOffset)
             }
 
             else -> throw AsepriteDecodeException(
@@ -525,12 +544,21 @@ object AsepriteImporter {
         // Decode every non-linked cel, then resolve links with cycle checks.
         val decoded = HashMap<Long, DecodedCel>()
         val visiting = HashSet<Long>()
+        var linkDepth = 0
         fun decodeCel(frameIndex: Int, layerIndex: Int): DecodedCel? {
             val key = frameIndex.toLong() * 65_536L + layerIndex
             decoded[key]?.let { return it }
             if (!visiting.add(key)) {
                 throw AsepriteDecodeException(
                     "Linked cel cycle detected at (frame $frameIndex, layer $layerIndex)"
+                )
+            }
+            // The visiting set catches cycles, not chains: a 50 000-frame
+            // forward link chain blew the JVM stack (StackOverflowError
+            // escapes every decode catch). Bound the depth outright.
+            if (++linkDepth > MAX_LINK_DEPTH) {
+                throw AsepriteDecodeException(
+                    "Linked cel chain deeper than $MAX_LINK_DEPTH at (frame $frameIndex, layer $layerIndex)"
                 )
             }
             try {
@@ -558,6 +586,7 @@ object AsepriteImporter {
                 return result
             } finally {
                 visiting.remove(key)
+                linkDepth--
             }
         }
 
@@ -681,6 +710,11 @@ object AsepriteImporter {
      * (`alpha * opacity / 255`). Returns null when nothing remains visible.
      */
     private fun placeCel(source: DecodedCel, x: Int, y: Int, opacity: Int, width: Int, height: Int): PixelFrame? {
+        // The canvas axes passed the import budget, but this is the last
+        // line of defense before a canvas-sized allocation.
+        if (width.toLong() * height > DecodeBudget.MAX_FRAME_PIXELS) {
+            throw AsepriteDecodeException("Canvas ${width}x${height} exceeds the import budget")
+        }
         val target = IntArray(width * height)
         var anyPixel = false
         for (sy in 0 until source.height) {

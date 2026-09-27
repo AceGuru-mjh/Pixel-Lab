@@ -155,6 +155,15 @@ object BmpCodec {
                 "Unsupported DIB header size $dibSize (supported: $DIB_INFO, $DIB_V4, $DIB_V5)"
             )
         }
+        // The V4/V5 mask fields live inside the declared DIB header; a file
+        // that stops at the 40-byte core header used to let the mask reads
+        // run past the buffer (AIOOBE instead of a decode exception).
+        if (bytes.size < FILE_HEADER_SIZE + dibSize) {
+            throw BmpDecodeException(
+                "BMP DIB header truncated: declares $dibSize bytes at offset $FILE_HEADER_SIZE " +
+                    "but only ${bytes.size - FILE_HEADER_SIZE} remain"
+            )
+        }
         val width = i32LeAt(bytes, FILE_HEADER_SIZE + 4)
         val rawHeight = i32LeAt(bytes, FILE_HEADER_SIZE + 8)
         if (width <= 0 || rawHeight == 0) {
@@ -162,6 +171,8 @@ object BmpCodec {
         }
         val topDown = rawHeight < 0
         val height = kotlin.math.abs(rawHeight)
+        // Import ceiling (width is client-controlled i32).
+        DecodeBudget.checkFrame("BMP", width, height) { BmpDecodeException(it) }
         val planes = u16LeAt(bytes, FILE_HEADER_SIZE + 12)
         if (planes != 1) {
             throw BmpDecodeException("BMP color planes $planes != 1")
@@ -225,8 +236,18 @@ object BmpCodec {
             }
         }
         val useMasks = redMask != 0
+        if (useMasks && bitCount != 32) {
+            // The mask loop reads a 4-byte word per pixel; a 24-bit row is
+            // packed at 3 bytes, so the loop walks off every row's end.
+            throw BmpDecodeException(
+                "Channel masks require 32 bpp data (bit depth is $bitCount)"
+            )
+        }
 
-        val rowSize = (bitCount * width + 31) / 32 * 4
+        // Long-domain: `bitCount * width` wrapped to 0 for 2^28-wide
+        // images, which made the truncation check vacuously pass and the
+        // raster allocation explode.
+        val rowSize = ((bitCount.toLong() * width + 31) / 32 * 4).toInt()
         val raster = IntArray(width * height)
         val pixelsStart = pixelOffset.toInt()
         if (pixelsStart.toLong() + rowSize.toLong() * height > bytes.size) {
@@ -301,7 +322,7 @@ object BmpCodec {
     private fun scaleChannel(value: Int, max: Int): Int = when {
         max == 255 -> value
         max == 0 -> 0
-        else -> (value * 255 + max / 2) / max
+        else -> ((value.toLong() * 255 + max / 2) / max).toInt()
     }
 
     /** Reads a little-endian u32 at [offset] (raw Int, bits preserved). */

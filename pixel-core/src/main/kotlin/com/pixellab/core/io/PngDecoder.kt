@@ -131,7 +131,7 @@ object PngDecoder {
         val maxRaw: Int = (1 shl depth) - 1
 
         /** Bytes of a packed scanline holding [pixels] pixels. */
-        fun rowBytes(pixels: Int): Int = (pixels * bitsPerPixel + 7) / 8
+        fun rowBytes(pixels: Int): Int = ((pixels.toLong() * bitsPerPixel + 7) / 8).toInt()
 
         /** Total filtered byte count of a `pixels x rows` raster. */
         fun rawSize(pixels: Int, rows: Int): Long {
@@ -378,6 +378,9 @@ object PngDecoder {
         if (width <= 0 || height <= 0) {
             throw PngDecodeException("IHDR dimensions ${width}x${height} are non-positive")
         }
+        // Import ceiling: IHDR is client-controlled; a 20000x20000 header
+        // on a 20 KB deflate stream used to allocate 1.6 GB here.
+        DecodeBudget.checkFrame("PNG IHDR", width, height) { PngDecodeException(it) }
         val allowedDepths = when (colorType) {
             0 -> intArrayOf(1, 2, 4, 8, 16)
             2 -> intArrayOf(8, 16)
@@ -481,6 +484,10 @@ object PngDecoder {
     ): List<PngFrame> {
         val canvasWidth = layout.width
         val canvasHeight = layout.height
+        // APNG retains a full-canvas snapshot per fcTL frame: the per-frame
+        // cost is canvas pixels, not region pixels, so tiny frames on a
+        // huge canvas used to amplify ~20000x. Budget the retention.
+        var retainedPixels = 0L
         var canvas = IntArray(canvasWidth * canvasHeight)
         var prevRect: IntArray? = null // [x, y, w, h] of previous frame
         var prevSnapshot: IntArray? = null
@@ -520,6 +527,9 @@ object PngDecoder {
                     }
                 }
             }
+            retainedPixels = DecodeBudget.accumulate(
+                "APNG", retainedPixels, canvasWidth.toLong() * canvasHeight,
+            ) { PngDecodeException(it) }
             frames.add(
                 PngFrame(
                     PixelFrame.of(canvasWidth, canvasHeight, canvas.copyOf()),

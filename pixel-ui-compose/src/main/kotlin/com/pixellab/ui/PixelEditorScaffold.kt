@@ -5,8 +5,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +41,13 @@ private val ToolRailWidth = 232.dp
 
 /** Width of the right inspector column in the wide layout. */
 private val SidePanelWidth = 292.dp
+
+/**
+ * Minimum canvas height in the compact stacked column. A weighted child
+ * collapses to zero inside a scrollable column, so the canvas needs an
+ * explicit floor instead of the wide layout's `weight(1f)`.
+ */
+private val CompactCanvasMinHeight = 280.dp
 
 /** Maximum iterations of a history jump loop (position safety guard). */
 private const val MaxJumpIterations = 1024
@@ -78,8 +88,10 @@ private const val MinTickMs = 16
  *
  * Responsive: below [CompactWidthBreakpoint] (measured with
  * [BoxWithConstraints]) the layout stacks tool rail, canvas, inspector
- * column, timeline and status bar into one scroll-free column; the status
- * bar switches to its compact segment set.
+ * column, timeline and status bar into one vertically scrollable column
+ * with the canvas floored at [CompactCanvasMinHeight]; the status bar
+ * switches to its compact segment set. The inspector column scrolls in
+ * both layouts — its panel stack outgrows any viewport.
  *
  * @param project the initial document; a *different project id* resets the
  *   session (fresh history) — live editing keeps the same instance.
@@ -153,9 +165,12 @@ fun PixelEditorScaffold(
     // ---- canvas gestures ----------------------------------------------------
     fun applyStroke(points: List<PixelPoint>, color: Int) {
         if (points.isEmpty()) return
+        // Locked layers reject every write; the stroke is dropped whole.
+        if (liveProject.activeLayer.locked) return
+        val painted = mirrorStroke(points, liveProject.width, liveProject.height, canvasState.symmetry)
         commit(if (color == 0) "Erase" else "Paint") { p ->
             val cel = p.activeCel() ?: PixelFrame.blank(p.width, p.height)
-            p.withActiveCel(cel.withPixels(points, color))
+            p.withActiveCel(cel.withPixels(painted, color))
         }
     }
 
@@ -221,7 +236,9 @@ fun PixelEditorScaffold(
                 }
             }
             val inspector: @Composable () -> Unit = {
-                Column {
+                // Scrolls: the panel stack (color, palette, layers, history)
+                // outgrows both the fixed side column and the stacked layout.
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     PixelPanel(theme = theme, title = "Color") {
                         ColorSliders(
                             theme = theme,
@@ -308,7 +325,12 @@ fun PixelEditorScaffold(
                         commit("Set fps") { it.withFps(fps) }
                     },
                     onDurationChange = { index, ms ->
-                        commit("Frame duration") { setFrameDuration(it, index, ms) }
+                        // Coalesce per frame id: consecutive duration commits
+                        // of the same frame fold into one undo step.
+                        val frameId = liveProject.frames.getOrNull(index)?.id
+                        commit("Frame duration", coalesceKey = "frame-duration-$frameId") {
+                            setFrameDuration(it, index, ms)
+                        }
                     },
                     onPlaybackChange = { playback = it },
                 )
@@ -371,13 +393,15 @@ fun PixelEditorScaffold(
                     state = canvasState,
                     onDrawPixels = { points, color -> applyStroke(points, color) },
                     onFill = { point ->
-                        commit("Fill") { p ->
-                            val cel = p.activeCel() ?: PixelFrame.blank(p.width, p.height)
-                            val pixels = FloodFill.flood(
-                                p.width, p.height, cel.pixels,
-                                point.x, point.y, primaryColor,
-                            )
-                            p.withActiveCel(PixelFrame.of(p.width, p.height, pixels))
+                        if (!liveProject.activeLayer.locked) {
+                            commit("Fill") { p ->
+                                val cel = p.activeCel() ?: PixelFrame.blank(p.width, p.height)
+                                val pixels = FloodFill.flood(
+                                    p.width, p.height, cel.pixels,
+                                    point.x, point.y, primaryColor,
+                                )
+                                p.withActiveCel(PixelFrame.of(p.width, p.height, pixels))
+                            }
                         }
                     },
                     onPick = { point ->
@@ -422,10 +446,10 @@ fun PixelEditorScaffold(
                     Column(modifier = Modifier.width(SidePanelWidth)) { inspector() }
                 }
             } else {
-                Column(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     toolRail()
                     transportBar()
-                    canvas(Modifier.weight(1f))
+                    canvas(Modifier.heightIn(min = CompactCanvasMinHeight))
                     preview()
                     timeline()
                     status()
@@ -473,6 +497,46 @@ private fun jumpHistoryTo(session: EditorSession, depth: Int) {
 
 /** Shifts a half-open selection rect by whole pixels. */
 private fun Rect.nudged(dx: Float, dy: Float): Rect = Rect(left + dx, top + dy, right + dx, bottom + dy)
+
+// ---- pure stroke geometry ----------------------------------------------------
+
+/**
+ * Expands a stroke point set with the copies implied by [symmetry], matching
+ * the axes [PixelCanvasPro] draws as guides: [CanvasSymmetry.HORIZONTAL]
+ * mirrors across the horizontal center axis (`y' = height - 1 - y`),
+ * [CanvasSymmetry.VERTICAL] across the vertical center axis
+ * (`x' = width - 1 - x`) and [CanvasSymmetry.FOUR_WAY] keeps the point plus
+ * all three mirrors. Originals and mirrors merge in a [LinkedHashSet] (first
+ * occurrence wins, stroke order preserved); points already outside the
+ * `width x height` grid pass through untouched — the canvas write path
+ * clips them.
+ */
+private fun mirrorStroke(
+    points: List<PixelPoint>,
+    width: Int,
+    height: Int,
+    symmetry: CanvasSymmetry,
+): List<PixelPoint> {
+    if (symmetry == CanvasSymmetry.OFF || points.isEmpty()) return points
+    val unique = LinkedHashSet<PixelPoint>(points.size * 2)
+    for (p in points) {
+        unique.add(p)
+        if (p.x !in 0 until width || p.y !in 0 until height) continue
+        val mx = width - 1 - p.x
+        val my = height - 1 - p.y
+        when (symmetry) {
+            CanvasSymmetry.HORIZONTAL -> unique.add(PixelPoint(p.x, my))
+            CanvasSymmetry.VERTICAL -> unique.add(PixelPoint(mx, p.y))
+            CanvasSymmetry.FOUR_WAY -> {
+                unique.add(PixelPoint(mx, p.y))
+                unique.add(PixelPoint(p.x, my))
+                unique.add(PixelPoint(mx, my))
+            }
+            CanvasSymmetry.OFF -> Unit
+        }
+    }
+    return unique.toList()
+}
 
 // ---- pure layer operations (project -> project) ---------------------------
 

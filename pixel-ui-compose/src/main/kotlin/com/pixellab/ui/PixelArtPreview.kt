@@ -2,6 +2,8 @@ package com.pixellab.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -144,8 +146,8 @@ object PreviewOverlays {
  * @param frames frames to preview; empty lists render an empty checkerboard.
  * @param style display options; validated on construction.
  * @param playback playback state (frame selection).
- * @param modifier host modifier; the canvas sizes itself to
- *   `frame.width * scale x frame.height * scale`.
+ * @param modifier host modifier; the canvas fills the available width and
+ *   locks the frame's aspect ratio (`frame.width / frame.height`).
  */
 @Composable
 fun PixelArtPreview(
@@ -162,8 +164,17 @@ fun PixelArtPreview(
     val checkerLight = remember(theme) { theme.colors.canvasCheckerLight.argbColor() }
     val checkerDark = remember(theme) { theme.colors.canvasCheckerDark.argbColor() }
 
+    // The canvas needs an explicit size: a bare Canvas measures 0x0 and
+    // renders nothing. Fill the host width and lock the frame aspect ratio
+    // instead (an empty frame list falls back to a square).
+    val aspect = if (frame != null && frame.height > 0) {
+        frame.width.toFloat() / frame.height
+    } else {
+        1f
+    }
+
     Box(modifier = modifier) {
-        Canvas(modifier = Modifier) {
+        Canvas(modifier = Modifier.fillMaxWidth().aspectRatio(aspect)) {
             val fw = frame?.width ?: 1
             val fh = frame?.height ?: 1
             val cell = style.scale

@@ -23,6 +23,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -152,6 +153,11 @@ class MainActivity : ComponentActivity() {
  * flight the points preview live on the canvas — the eraser previews in a
  * near-white tint while it actually writes transparent black. Fill and Picker
  * act immediately on pointer down.
+ *
+ * Agent commands: `text:` renders the message through the template engine
+ * and lands it on the canvas as a new animation frame; `template:` swaps in
+ * a built-in sprite while keeping the live document id; `breathe` runs the
+ * animation effect; `clear` wipes the active cel.
  */
 @Composable
 fun PixelLabSampleApp() {
@@ -171,14 +177,14 @@ fun PixelLabSampleApp() {
     var exportMenuOpen by remember { mutableStateOf(false) }
     var layersExpanded by remember { mutableStateOf(false) }
     var agentInput by remember { mutableStateOf("") }
+    var exporting by remember { mutableStateOf(false) }
 
     val activeFrameIndex = project.activeFrameIndex
     val strokePreviewColor = if (tool == Tool.ERASER) EraserPreviewColor else selectedColor
-    // The canvas ghosts the neighbors of the project it receives, so the
-    // engine's onion-skin data doubles as the gate for the canvas overlay.
-    val onionSkinData = remember(project, onionSkinEnabled, activeFrameIndex) {
-        if (onionSkinEnabled) lab.animation.onionSkin(project) else null
-    }
+    // The canvas ghosts the neighbors of the project it receives (its
+    // onionSkin parameter takes the project itself), so the onion toggle
+    // gates the overlay directly — no engine-side precomputation is needed
+    // on this path.
 
     /** Posts [message] as a snackbar on this composition's scope. */
     fun report(message: String) {
@@ -242,15 +248,31 @@ fun PixelLabSampleApp() {
         try {
             when {
                 command.startsWith(AgentTextPrefix) -> {
-                    val frame = lab.template.generateText(
+                    val textFrame = lab.template.generateText(
                         command.removePrefix(AgentTextPrefix),
                         color = selectedColor,
                     )
-                    report("Text frame: ${frame.width}x${frame.height}")
+                    // The rendered frame is text-sized; center it on a
+                    // project-sized cel (clipped when the text outruns the
+                    // canvas) and land it as a fresh animation frame — the
+                    // command actually reaches the canvas instead of
+                    // rendering into the void.
+                    val offX = (project.width - textFrame.width) / 2
+                    val offY = (project.height - textFrame.height) / 2
+                    val cel = textFrame.transformed(project.width, project.height) { x, y ->
+                        textFrame[x - offX, y - offY]
+                    }
+                    project = lab.animation.addFrame(project).withActiveCel(cel)
+                    report("Text added as frame ${project.frameCount}: ${textFrame.width}x${textFrame.height}")
                 }
                 command.startsWith(AgentTemplatePrefix) -> {
                     val id = command.removePrefix(AgentTemplatePrefix).trim()
-                    project = lab.template.apply(id)
+                    // Template projects carry "tpl-<id>" ids; re-key the
+                    // result onto the live document's id so the engine's
+                    // per-id undo history (and every other id-keyed state)
+                    // follows the swap instead of being orphaned behind a
+                    // stale key.
+                    project = lab.template.apply(id).copy(id = project.id)
                     report("Template '$id' loaded")
                 }
                 command == AgentBreatheKeyword -> {
@@ -273,18 +295,24 @@ fun PixelLabSampleApp() {
 
     /** Exports the current project in [kind] format into the external dir. */
     fun requestExport(kind: ExportKind) {
+        // Re-entry guard: one export at a time; the entry point stays
+        // disabled and the progress line runs for the whole duration.
+        if (exporting) return
         exportMenuOpen = false
         val dir = context.getExternalFilesDir(null)
         if (dir == null) {
             report("External storage unavailable")
             return
         }
+        exporting = true
         scope.launch {
             try {
                 val result = doExport(kind, lab, project, dir)
                 report("${kind.label} saved: ${result.file.name} (${result.byteCount} B)")
             } catch (error: Exception) {
                 report("Export failed: ${error.message}")
+            } finally {
+                exporting = false
             }
         }
     }
@@ -296,6 +324,13 @@ fun PixelLabSampleApp() {
         contentAlignment = Alignment.BottomStart,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // 0. Export progress line: visible — and the export entry
+            // disabled — while an export runs, so long GIF/APNG encodes
+            // give feedback and cannot be double-triggered.
+            if (exporting) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
             // 1. Tool bar: tool chips, undo/redo and the export menu.
             Row(
                 modifier = Modifier
@@ -324,7 +359,10 @@ fun PixelLabSampleApp() {
                     Icon(imageVector = Icons.Filled.Redo, contentDescription = "Redo")
                 }
                 Box {
-                    TextButton(onClick = { exportMenuOpen = true }) {
+                    TextButton(
+                        onClick = { exportMenuOpen = true },
+                        enabled = !exporting,
+                    ) {
                         Text(text = "Export")
                     }
                     DropdownMenu(
@@ -353,13 +391,21 @@ fun PixelLabSampleApp() {
                     palette = project.palette,
                     selectedColor = selectedColor,
                     onColorSelect = { selectedColor = it },
-                    onPaletteSwitch = { project = project.withPalette(it) },
+                    onPaletteSwitch = { next ->
+                        // View-level swap: withPalette preserves the project
+                        // id (it is a copy(palette = …)), so the engine's
+                        // per-id undo stack stays keyed correctly. PixelEngine
+                        // exposes no palette-edit entry point (its commit()
+                        // is private), so the change is deliberately outside
+                        // undo — a documented sample-app trade-off.
+                        project = project.withPalette(next)
+                    },
                     modifier = Modifier.width(PalettePanelWidth),
                 )
                 PixelCanvas(
                     project = project,
                     frameIndex = activeFrameIndex,
-                    onionSkin = onionSkinData?.let { project },
+                    onionSkin = if (onionSkinEnabled) project else null,
                     strokePreview = strokePoints,
                     strokePreviewColor = strokePreviewColor,
                     onPixelDown = { handleDown(it) },

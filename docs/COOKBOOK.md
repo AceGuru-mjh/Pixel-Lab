@@ -27,8 +27,11 @@
 1. io_import_frames(data_b64=<photo>)
    → format=PNG, width=480, height=640, palette_hint=null   # 照片色数 > 256
 2. canvas_create(width=64, height=64, palette_id="pico-8")   # 或 endesga-32
-3. convert_image(pixels=<采样>, width=64, height=64, color_count=16, dither="floydsteinberg")
-   → 量化+抖动一次完成
+3. convert_image(pixels=<采样>, width=64, height=64, color_count=16, dither="floydsteinberg",
+                 session_id=<第2步的会话id>, commit=true)
+   → 量化+抖动一次完成，并把结果直接盖到该会话活动 cel
+   （不传 session_id 则只返回摘要——转换结果留在内存里，需自拿 pixels 回传；
+   传了 commit=false 则显式要求"只转不落笔"）
 4. canvas_outline(color="#000000")                            # 1px 黑描边增强轮廓
 5. anim_breathe(amplitude=1)                                  # 可选：两帧微呼吸
 6. export_gif(loop_count=0)                                   → byte_count
@@ -53,8 +56,8 @@
 ```
 
 **坑点**：
+- `tilemap_create` 没有 `tileset` 参数——瓦片集固定为草地 blob-47（`tile_size` 只接受 8）。想要石块风格用 `tilemap_autotile(mode="wang")`（石块 Wang 瓦片集）。
 - `mode="simple16"` 只需 16 形态，瓦片集更小但边缘更硬；`wang` 用于 Wang 角点风格。
-- 想要石块风格：`tilemap_create` 的 `tileset="stone-wang16"`。
 - `height_offsets` 只在 `tilemap_iso_render` 里有效，平面渲染忽略它。
 
 ## 3. 精灵图集 + Godot/Tiled 元数据
@@ -87,7 +90,7 @@
 ```
 
 **坑点**：
-- `text_generate` 返回的是尺寸+像素数，精灵内容在会话里；先 `canvas_info` 确认非零像素数 > 0 再导出。
+- `text_generate` 是纯渲染报告：只返回尺寸+像素数，**不落笔到任何会话**。要真正把文字画上画布用 `draw_text`（V2）——渲染后直接盖印到会话活动 cel；先 `canvas_info` 确认非零像素数 > 0 再导出。
 - 精灵表横向拼接时两帧高度必须一致——呼吸动画只位移不改尺寸。
 
 ## 5. QOI 无损往返工作流
@@ -130,16 +133,18 @@
 
 ```
 1. io_import_frames(data_b64=<ase>)            → format=ASE, frames=N, palette_hint=[...]
-   # 完整项目路径：
-   io_import_project(data_b64=<ase>)           → 图层/帧/标签/cel 全保留
+   # 完整项目路径（把 .ase 转成可编辑会话）：
+   io_import_image(data_b64=<ase>, session_id=<目标会话>)   → 图层合成后的帧/时长/cel 入会话
    # AsepriteImporter 直连（Kotlin API）：
    # AsepriteImporter.import(bytes, "name") → SpriteProject
-2. palette_switch(palette_id="pico-8") + convert_image(color_count=16)
+2. palette_switch(palette_id="pico-8") + convert_image(color_count=16, session_id=<会话>)
    # 或 replace_color 逐色替换
 3. export_gif(loop_count=0)
 ```
 
 **坑点**：
+- `io_import_project` 只摄取**项目 JSON（v2 线格式）**，不能读 .ase 字节——.ase 走 `io_import_image`（完整项目化）或 `io_import_frames`（只探帧）。项目 JSON 从 `project_export_json` / `session_save` 来。
+- `io_import_image` 建的项目是单层合成（Aseprite 图层结构不入模型）；要保图层/帧/标签用 AsepriteImporter 直连。
 - `.ase` 的 cel 透明度会烘焙进像素 alpha（模型无 cel 级 opacity 字段）。
 - 图层组（folder layer）被展平——导入后图层是平铺列表，组内 cel 保留。
 - 链接 cel（linked）解析为像素拷贝；16 位灰度旧文件按 v>>8 提亮。

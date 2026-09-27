@@ -26,8 +26,8 @@ enum class RegionFormat {
 
     /**
      * Chars per [AsciiRenderer]'s LETTERS mapping plus a legend — the exact
-     * input format [com.pixellab.core.skill.SketchParser] accepts, so an
-     * agent can read a region, tweak the text and draw it back.
+     * input format [SketchParser] accepts, so an agent can read a region,
+     * tweak the text and draw it back.
      */
     SKETCH,
 }
@@ -209,8 +209,14 @@ object RegionReader {
         for ((rank, color) in ordered.withIndex()) {
             val ch = alphabet[rank % alphabet.length]
             charOf[color] = ch
-            val display = palette?.let { AsciiRenderer.snapToPalette(color, it) } ?: color
-            legend.add("$ch=${ColorCensus.hex(display)}")
+            // Lossless round-trip contract: the legend carries the RAW
+            // canvas color, never a palette-snapped approximation — a
+            // sketch that goes out, gets edited, and comes back through
+            // SketchParser must reproduce the exact original pixels.
+            // (Snapping is a display concern for the ascii/palette_index
+            // formats; sketch_draw would silently shift off-palette
+            // colors if the legend lied.)
+            legend.add("$ch=${ColorCensus.hex(color)}")
         }
         val sb = StringBuilder(read.cellCount + legend.size * 12)
         for (line in legend) sb.append(line).append('\n')

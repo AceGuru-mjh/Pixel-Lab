@@ -274,11 +274,20 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
     }
 
     private fun intParam(params: JsonObject, key: String, default: Int): Int = when (val raw = params.raw(key)) {
+        null, is JsonNull -> default
         is JsonNumber -> {
             if (raw.value != Math.floor(raw.value)) throw IllegalArgumentException("'$key' must be an integer")
+            // 32-bit domain guard: a 1e20 entry must fail instead of
+            // silently clamping to an arbitrary Int.
+            if (raw.value < Int.MIN_VALUE.toDouble() || raw.value > Int.MAX_VALUE.toDouble()) {
+                throw IllegalArgumentException("'$key' must be a 32-bit integer")
+            }
             raw.value.toInt()
         }
-        else -> default
+        is JsonString -> raw.value.toIntOrNull() ?: throw IllegalArgumentException("'$key' must be a number")
+        // Booleans, objects and arrays are never a meaningful integer —
+        // reject them instead of silently falling back to the default.
+        else -> throw IllegalArgumentException("'$key' must be an integer")
     }
 
     private fun strParam(params: JsonObject, key: String, default: String): String = when (val raw = params.raw(key)) {
@@ -485,7 +494,7 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
         }
 
         add("frame_metrics", "Read-only comparison of the session's active cel against another frame in the same project: MAE per channel, PSNR, changed-pixel ratio and changed bounds.", "v4-analysis",
-            "session_id" to "string", "frame_index_a" to "integer", "frame_index_b" to "integer", "tolerance" to "integer",
+            "session_id" to "string", "frame_index_a" to "integer", "frame_index_b" to "integer",
             required = listOf("session_id", "frame_index_b")) { params, store ->
             val project = sessionOf(params, store).project
             val aIndex = intParam(params, "frame_index_a", project.activeFrameIndex)
@@ -772,7 +781,12 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
                 }
             }
             val frame = ls.render(
-                step = doubleParam(params, "step", 3.0),
+                step = doubleParam(params, "step", 3.0).also { step ->
+                    // Entry guard: the rendered canvas scales linearly with
+                    // the step, so an unbounded value allocates unbounded
+                    // frames before pixel-core ever sees the request.
+                    require(step in 1.0..1024.0) { "'step' must be in [1, 1024] (was $step)" }
+                },
                 angleDeg = doubleParam(params, "angle", 25.0),
                 iterations = intParam(params, "iterations", 4),
                 rng = if (preset == "bush" || params.raw("seed") != null) SeededRng(seedParam(params)) else null,
@@ -788,6 +802,8 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
             val session = sessionOf(params, store)
             val width = intParam(params, "width", 64)
             val height = intParam(params, "height", 64)
+            require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
+            require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
             val originX = width / 2.0
             val originY = height / 2.0
             val base = when (preset) {

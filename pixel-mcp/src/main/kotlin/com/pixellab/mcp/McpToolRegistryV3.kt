@@ -26,6 +26,7 @@ import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.SpriteFactory
 import com.pixellab.core.model.SpriteProject
 import com.pixellab.core.palette.BuiltInPalettes
+import com.pixellab.core.palette.PaletteIO
 import com.pixellab.core.palette.PaletteLibrary
 import com.pixellab.core.pipeline.PipelineRunner
 import com.pixellab.core.pipeline.Recipe
@@ -57,12 +58,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Third-tier MCP tool registry for Pixel Lab: 29 additional tools covering
- * the PR7 import/export codecs (`io_*`), the PR8 generators and cel effects
- * (`gen_*`, `outline`, `shade`, `ramp`, `flip_rotate`, `canvas_resize`),
- * the PR9 tilemap and atlas machinery (`tilemap_*`, `io_export_atlas`,
- * `texture_*`), guarded [CommandHistory] editing (`history_*`) and the PR8
- * pipeline recipes (`pipeline_*`).
+ * Third-tier MCP tool registry for Pixel Lab: 31 additional tools covering
+ * the PR7 import/export codecs (`io_*`, including the image import
+ * `io_import_image` and `palette_import` closed loops), the PR8 generators
+ * and cel effects (`gen_*`, `outline`, `shade`, `ramp`, `flip_rotate`,
+ * `canvas_resize`), the PR9 tilemap and atlas machinery (`tilemap_*`,
+ * `io_export_atlas`, `texture_*`), guarded [CommandHistory] editing
+ * (`history_*`) and the PR8 pipeline recipes (`pipeline_*`).
  *
  * ## Hosting (identical strategy to [McpToolRegistryV2])
  *
@@ -116,6 +118,9 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
 
         /** Upper bound of one binary payload inlined as base64 (2 MB). */
         private const val MAX_INLINE_BYTES: Int = 2 * 1024 * 1024
+
+        /** Upper bound for palette text accepted by palette_import (64 KB). */
+        private const val MAX_PALETTE_TEXT: Int = 65_536
 
         /** Tile size of the demo grass tilesets (only supported size). */
         private const val DEMO_TILE_SIZE: Int = 8
@@ -383,7 +388,35 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
         put("byte_count", bytes.size)
         put("width", width)
         put("height", height)
-        put("data_b64", Base64.getEncoder().encodeToString(bytes))
+        for ((key, value) in inlineBytes(bytes).entries) put(key, value)
+    }
+
+    /** Inline bytes block: `data_b64` up to the 2 MB cap, otherwise a note
+     * pointing at the durable alternatives (session_save, smaller scale). */
+    private fun inlineBytes(bytes: ByteArray): JsonObject = jsonobj {
+        if (bytes.size <= MAX_INLINE_BYTES) {
+            put("data_b64", Base64.getEncoder().encodeToString(bytes))
+        } else {
+            put(
+                "note",
+                "output too large for inline return (${bytes.size} bytes); " +
+                    "use session_save or a smaller scale",
+            )
+        }
+    }
+
+    /** Strict 64-bit integer seed parameter (absent or JSON null → 0). */
+    private fun seedParam(params: JsonObject): Long = when (val raw = params.raw("seed")) {
+        null, is JsonNull -> 0L
+        is JsonNumber -> {
+            if (raw.value != Math.floor(raw.value) ||
+                raw.value < Long.MIN_VALUE.toDouble() || raw.value > Long.MAX_VALUE.toDouble()
+            ) {
+                throw IllegalArgumentException("parameter 'seed' must be a 64-bit integer")
+            }
+            raw.value.toLong()
+        }
+        else -> throw IllegalArgumentException("parameter 'seed' must be an integer")
     }
 
     /** Thumbnail-style nearest downscale so the longest edge fits [maxSize]. */
@@ -488,6 +521,95 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             projectSummary(session, project)
         }
 
+        add("io_import_image",
+            "Imports base64 image bytes (PNG/APNG/GIF/QOI/BMP/Aseprite) as a full session project — GIF/APNG frame durations and the palette hint are preserved. With session_id the project replaces that session's content; without, a fresh session is created. The read-side counterpart of every export tool: pixels that leave as bytes come back as an editable canvas.",
+            "v3-io",
+            "data_b64" to "string", "name" to "string", "session_id" to "string",
+            required = listOf("data_b64")) { params, store ->
+            val bytes = bytesParam(params)
+            val name = params.opt("name", "import")
+            val imported = ImageImporter.importFrames(bytes)
+            val project = ImageImporter.importProject(bytes, name)
+            val session = when (val raw = params.raw("session_id")) {
+                null, is JsonNull -> store.newSession(
+                    palette = project.palette,
+                    width = project.width,
+                    height = project.height,
+                    name = name,
+                )
+                else -> sessionOf(params, store)
+            }
+            commit(store, session, "io_import_image (${imported.format.name.lowercase()})", session.project, project)
+            jsonobj {
+                for ((key, value) in projectSummary(session, project).entries) put(key, value)
+                put("format", imported.format.name.lowercase())
+                put("format_label", imported.format.humanName())
+                put("frame_count", project.frameCount)
+                put(
+                    "durations_ms",
+                    jsonarray {
+                        for (index in 0 until project.frameCount) {
+                            add(JsonNumber.of(project.effectiveFrameDuration(index).toLong()))
+                        }
+                    },
+                )
+                put("byte_count", bytes.size)
+            }
+        }
+
+        add("palette_import",
+            "Parses a palette text (jasc / gpl / hex-list; format auto-sniffed when omitted) and, with session_id, applies it as the session's active palette. Without session_id the parse result is returned only — pair it with palette_set_colors to apply later.",
+            "v3-io",
+            "text" to "string", "format" to "string", "session_id" to "string", "palette_id" to "string",
+            required = listOf("text")) { params, store ->
+            val text = params.string("text")
+            require(text.length <= MAX_PALETTE_TEXT) {
+                "parameter 'text' is ${text.length} characters, beyond the $MAX_PALETTE_TEXT character cap"
+            }
+            val formatRaw = params.opt("format", "").trim().lowercase()
+            val format = when (formatRaw) {
+                "" -> PaletteIO.guessFormat(text)
+                "jasc", "jasc-pal" -> PaletteIO.Format.JASC
+                "gpl", "gimp" -> PaletteIO.Format.GPL
+                "hex", "hex-list" -> PaletteIO.Format.HEX
+                else -> throw IllegalArgumentException("format must be jasc, gpl or hex (was '$formatRaw')")
+            }
+            val paletteId = params.opt("palette_id", "").trim()
+            val parsed = when (format) {
+                PaletteIO.Format.JASC -> PaletteIO.fromJasc(text)
+                PaletteIO.Format.GPL -> PaletteIO.fromGpl(text)
+                PaletteIO.Format.HEX -> PaletteIO.fromHexList(
+                    text,
+                    id = paletteId.ifEmpty { "imported" },
+                    name = "Imported hex list",
+                )
+            }
+            val palette = if (paletteId.isEmpty()) {
+                parsed
+            } else {
+                Palette(paletteId, parsed.name, parsed.colors, PaletteSource.IMPORTED)
+            }
+            val envelope = jsonobj {
+                put("format", format.name.lowercase())
+                put("palette", jsonobj {
+                    put("palette_id", palette.id)
+                    put("name", palette.name)
+                    put("color_count", palette.size)
+                    put("colors", hexList(palette.colors.toList()))
+                })
+            }
+            val sessionRequested = params.raw("session_id")?.let { it !is JsonNull } == true
+            if (sessionRequested) {
+                mutate(params, store, "palette_import (${format.name.lowercase()})") { it.withPalette(palette) }
+                    .toMutable()
+                    .put("applied", true)
+                    .apply { for ((key, value) in envelope.entries) put(key, value) }
+                    .build()
+            } else {
+                envelope.toMutable().put("applied", false).build()
+            }
+        }
+
         add("io_export_qoi", "Encodes one composited frame as QOI 1.0 bytes (data_b64 + byte_count).", "v3-io",
             "session_id" to "string", "frame_index" to "integer", "scale" to "integer",
             required = listOf("session_id")) { params, store ->
@@ -507,7 +629,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                 put("frame_index", frameIndex)
                 put("width", target.width)
                 put("height", target.height)
-                put("data_b64", Base64.getEncoder().encodeToString(bytes))
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
@@ -530,7 +652,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                 put("frame_index", frameIndex)
                 put("width", target.width)
                 put("height", target.height)
-                put("data_b64", Base64.getEncoder().encodeToString(bytes))
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
@@ -560,7 +682,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                 put("width", frame.width)
                 put("height", frame.height)
                 put("sizes_count", sizes.size)
-                put("data_b64", Base64.getEncoder().encodeToString(bytes))
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 
@@ -590,7 +712,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val height = params.int("height")
             require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
             require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
-            val seed = params.opt("seed", 0L)
+            val seed = seedParam(params)
             val palette = paletteParam(params)
             val colors = palette.colors
             val frame = when (type) {
@@ -644,7 +766,12 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             require(size in 6..256) { "'size' must be in [6, 256] (was $size)" }
             val width = if (explicitWidth is JsonNumber) params.int("width") else size
             val height = if (explicitHeight is JsonNumber) params.int("height") else size
-            val seed = params.opt("seed", 0L)
+            // Explicit dimensions bypass the 6..256 'size' guard, so they
+            // get their own entry guard: 4096 keeps the generated frame
+            // within the pixel-core raster budget.
+            require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
+            require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
+            val seed = seedParam(params)
             val colors = hexColorsParam(params, "colors", min = 1)
             val frame = when (type) {
                 "tree" -> SpriteGen.tree(
@@ -725,7 +852,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val height = params.int("height")
             require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
             require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
-            val seed = params.opt("seed", 0L)
+            val seed = seedParam(params)
             val tile = params.opt("tile", 0)
             require(tile >= 0) { "'tile' must be >= 0 (was $tile)" }
             val octaves = params.opt("octaves", 4)
@@ -1084,7 +1211,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
                 } else {
                     put("note", "metadata has ${metadata.length} characters, exceeding the $TEXT_RESULT_LIMIT inline limit")
                 }
-                put("data_b64", Base64.getEncoder().encodeToString(bytes))
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
             }
         }
 

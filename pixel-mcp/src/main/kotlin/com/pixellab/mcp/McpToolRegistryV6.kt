@@ -5,7 +5,9 @@ import com.pixellab.core.batch.BatchOp
 import com.pixellab.core.batch.DrawingBatch
 import com.pixellab.core.describe.FrameDiff
 import com.pixellab.core.describe.FrameFingerprintComputer
+import com.pixellab.core.describe.SketchParser
 import com.pixellab.core.engine.CheckpointTracker
+import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.PixelPoint
 import com.pixellab.core.model.SpriteProject
 import com.pixellab.core.project.ProjectCodec
@@ -42,7 +44,7 @@ data class McpPersistence(
 
 /**
  * Sixth-tier MCP tool registry for Pixel Lab: **agent ergonomics** — the
- * twelve tools that make long pixel-art sessions over a transport
+ * fourteen tools that make long pixel-art sessions over a transport
  * practical.
  *
  * What was still missing after tier 5 (vision):
@@ -55,14 +57,20 @@ data class McpPersistence(
  *    `dry_run: true` validates without mutating.
  *  * **Durability** — sessions died with the process. [session_save] /
  *    [session_load] / [session_saved_list] / [session_saved_delete] put a
- *    named-slot layer ([SlotStore]) over [ProjectStore] persistence.
+ *    named-slot layer ([SlotStore]) over [ProjectStore] persistence, and
+ *    [project_delete] removes the stored pixels themselves.
  *  * **Recoverable experiments** — undo-by-N is guesswork.
  *    [checkpoint_set] / [checkpoint_list] / [checkpoint_rollback] /
  *    [checkpoint_delete] mark known-good depths of the engine history
  *    ([CheckpointTracker]) and roll back to them in one call.
  *  * **Cheap verification** — [canvas_checksum] is a constant-size
- *    frame fingerprint; [project_export_json] closes the v3 import/export
- *    asymmetry by emitting the round-trippable wire document.
+ *    frame fingerprint (scope='project' for whole-animation digests);
+ *    [project_export_json] closes the v3 import/export asymmetry by
+ *    emitting the round-trippable wire document.
+ *  * **Vision round-trip** — [sketch_draw] takes the exact text
+ *    `canvas_read(format='sketch')` / `canvas_legend` produce and stamps it
+ *    back onto the canvas, so an agent can read → edit → redraw without
+ *    ever decoding a pixel grid by hand.
  *
  * Every mutating handler writes the resulting project back through the
  * session store (the tier 1–5 discipline). Handlers validate parameters
@@ -86,6 +94,20 @@ class McpToolRegistryV6(
 
     private val mutex = Mutex()
     private val checkpoints = CheckpointTracker()
+
+    private companion object {
+        /** Upper bound of one binary payload inlined as base64 (2 MB). */
+        private const val MAX_INLINE_BYTES: Int = 2 * 1024 * 1024
+
+        /** Upper bound for sketch text accepted by sketch_draw (256 KB). */
+        private const val MAX_SKETCH_TEXT: Int = 262_144
+
+        /** FNV-1a 64 offset basis (see [fnv64]). */
+        private const val FNV_OFFSET_BASIS: Long = -0x61c8864680b583ebL // 0xcbf29ce484222325
+
+        /** FNV-1a 64 prime (see [fnv64]). */
+        private const val FNV_PRIME: Long = 0x100000001b3L
+    }
 
     /** Tool descriptors in registration order. */
     val tools: List<McpTool>
@@ -232,6 +254,30 @@ class McpToolRegistryV6(
         )
     }
 
+    /** FNV-1a 64 over [bytes] (the same parameters the frame fingerprints
+     * use), rendered as 16 lowercase hex characters. */
+    private fun fnv64(bytes: ByteArray): String {
+        var hash = FNV_OFFSET_BASIS
+        for (b in bytes) {
+            hash = hash xor (b.toLong() and 0xffL)
+            hash *= FNV_PRIME
+        }
+        return "%016x".format(hash)
+    }
+
+    /** Inline bytes block: `data_b64` up to the 2 MB cap, otherwise a note
+     * pointing at the durable alternative (session_save). */
+    private fun inlineBytes(bytes: ByteArray): JsonObject = jsonobj {
+        if (bytes.size <= MAX_INLINE_BYTES) {
+            put("data_b64", Base64.getEncoder().encodeToString(bytes))
+        } else {
+            put(
+                "note",
+                "output too large for inline return (${bytes.size} bytes); use session_save instead",
+            )
+        }
+    }
+
     // ---- registry ------------------------------------------------------------
 
     private fun buildTools(): Pair<List<McpTool>, Map<String, JsonObject>> {
@@ -345,28 +391,67 @@ class McpToolRegistryV6(
 
         add(
             "canvas_checksum",
-            "Returns a constant-size fingerprint (FNV-1a 64 hex) of the composited frame plus visible-pixel count. Compare digests before/after any operation to verify a change landed — far cheaper than canvas_read when you only need 'did it change?'. Sensitive to a single pixel; stable across restarts.",
+            "Returns a constant-size fingerprint (FNV-1a 64 hex) of the composited frame plus visible-pixel count — compare digests before/after any operation to verify a change landed, far cheaper than canvas_read. scope='frame' (default) fingerprints one frame (frame_index, default active). scope='project' returns one {index, digest, visible_pixels} entry per frame PLUS project_checksum: FNV-1a 64 over the ASCII concatenation of all per-frame digests (each frame is itself FNV-1a 64 over its ARGB pixels, alpha-zero RGB normalized, dimensions and visible count mixed in). Sensitive to a single pixel; stable across restarts.",
             "v6-verify",
-            "session_id" to "string", "frame_index" to "integer",
+            "session_id" to "string", "frame_index" to "integer", "scope" to "string",
             required = listOf("session_id"),
         ) { params, store ->
             val session = sessionOf(params, store)
             val project = session.project
-            val frameIndex = optionalInt(params, "frame_index") ?: project.activeFrameIndex
-            if (frameIndex < 0 || frameIndex >= project.frameCount) {
-                throw IllegalArgumentException(
-                    "frame_index $frameIndex outside 0..${project.frameCount - 1} (project has ${project.frameCount} frames)",
-                )
+            val scope = when (val raw = params.opt("scope", "frame").trim().lowercase()) {
+                "frame" -> "frame"
+                "project" -> "project"
+                else -> throw IllegalArgumentException("scope must be 'frame' or 'project' (was '$raw')")
             }
-            val frame = project.compositeFrame(frameIndex)
-            val fingerprint = FrameFingerprintComputer.of(frame)
-            jsonobj {
-                put("session_id", session.id)
-                put("frame_index", frameIndex)
-                put("digest", fingerprint.digest)
-                put("width", fingerprint.width)
-                put("height", fingerprint.height)
-                put("visible_pixels", fingerprint.visiblePixels)
+            if (scope == "project") {
+                val digests = (0 until project.frameCount).map {
+                    FrameFingerprintComputer.of(project.compositeFrame(it))
+                }
+                jsonobj {
+                    put("session_id", session.id)
+                    put("scope", "project")
+                    put("frame_count", project.frameCount)
+                    put(
+                        "frames",
+                        jsonarray {
+                            for ((index, fingerprint) in digests.withIndex()) {
+                                add(
+                                    jsonobj {
+                                        put("index", num(index))
+                                        put("checksum", fingerprint.digest)
+                                        put("visible_pixels", num(fingerprint.visiblePixels.toLong()))
+                                    },
+                                )
+                            }
+                        },
+                    )
+                    // Per-frame FNV digests are concatenated (in frame order)
+                    // and the concatenation is hashed again with FNV-1a 64 —
+                    // one stable value that reacts to any frame changing,
+                    // reordering or the frame count itself.
+                    put(
+                        "project_checksum",
+                        fnv64(digests.joinToString("") { it.digest }.toByteArray(Charsets.US_ASCII)),
+                    )
+                }
+            } else {
+                val frameIndex = optionalInt(params, "frame_index") ?: project.activeFrameIndex
+                if (frameIndex < 0 || frameIndex >= project.frameCount) {
+                    throw IllegalArgumentException(
+                        "frame_index $frameIndex outside 0..${project.frameCount - 1} (project has ${project.frameCount} frames)",
+                    )
+                }
+                val frame = project.compositeFrame(frameIndex)
+                val fingerprint = FrameFingerprintComputer.of(frame)
+                jsonobj {
+                    put("session_id", session.id)
+                    put("scope", "frame")
+                    put("frame_index", frameIndex)
+                    put("digest", fingerprint.digest)
+                    put("width", fingerprint.width)
+                    put("height", fingerprint.height)
+                    put("visible_pixels", fingerprint.visiblePixels)
+                }
             }
         }
 
@@ -429,7 +514,15 @@ class McpToolRegistryV6(
         ) { params, store ->
             val session = sessionOf(params, store)
             val name = params.string("name")
-            val result = checkpoints.rollback(session.id, name, session.project.id, lab.engine)
+            // CheckpointTracker signals 'checkpoint missing' / 'project
+            // lineage swapped' with IllegalStateException, which would
+            // surface as an isError envelope instead of -32602; the tool
+            // contract for bad references is INVALID_PARAMS.
+            val result = try {
+                checkpoints.rollback(session.id, name, session.project.id, lab.engine)
+            } catch (error: IllegalStateException) {
+                throw McpToolException(error.message ?: "checkpoint '$name' cannot roll back")
+            }
             val restored = result.restoredProject
             if (restored != null) {
                 store.update(session.id, restored)
@@ -534,7 +627,7 @@ class McpToolRegistryV6(
 
         add(
             "session_saved_delete",
-            "Deletes a saved slot by name. The underlying project pixels are untouched (delete them via the gallery/store separately).",
+            "Deletes a saved slot by name. The underlying project pixels are untouched (delete them with project_delete).",
             "v6-persist",
             "name" to "string",
             required = listOf("name"),
@@ -547,6 +640,25 @@ class McpToolRegistryV6(
             }
             jsonobj {
                 put("name", name)
+                put("deleted", true)
+            }
+        }
+
+        add(
+            "project_delete",
+            "Deletes a stored project from the persistence root by project id (as reported by session_saved_list). Slots pointing at the deleted project stay but read as unreadable; in-memory sessions are untouched. This is the disk-side counterpart of session_saved_delete, which only removes the slot pointer.",
+            "v6-persist",
+            "project_id" to "string",
+            required = listOf("project_id"),
+        ) { params, _ ->
+            val persistence = requirePersistence()
+            val projectId = params.string("project_id")
+            val deleted = persistence.projects.delete(projectId)
+            if (!deleted) {
+                throw IllegalArgumentException("no stored project '$projectId' (see session_saved_list for project ids)")
+            }
+            jsonobj {
+                put("project_id", projectId)
                 put("deleted", true)
             }
         }
@@ -575,7 +687,7 @@ class McpToolRegistryV6(
 
         add(
             "project_export_json",
-            "Exports the session project as the version-2 wire document (data_b64, UTF-8 JSON) — the exact format io_import_project reads back. Round-trips pixel-perfect; use it to migrate sessions between servers or embed projects in prompts.",
+            "Exports the session project as the version-2 wire document (data_b64, UTF-8 JSON, inline up to 2 MB) — the exact format io_import_project reads back. Round-trips pixel-perfect; use it to migrate sessions between servers or embed projects in prompts.",
             "v6-hygiene",
             "session_id" to "string",
             required = listOf("session_id"),
@@ -586,9 +698,72 @@ class McpToolRegistryV6(
             jsonobj {
                 put("session_id", session.id)
                 put("project_id", session.project.id)
-                put("data_b64", Base64.getEncoder().encodeToString(bytes))
                 put("byte_count", num(bytes.size.toLong()))
                 put("wire_version", ProjectCodec.VERSION)
+                for ((key, value) in inlineBytes(bytes).entries) put(key, value)
+            }
+        }
+
+        // ---- v6-sketch: the write half of the vision loop -------------------
+
+        add(
+            "sketch_draw",
+            "Draws a SKETCH document onto the session — the text format canvas_read(format='sketch') and canvas_legend produce: legend lines 'C=#RRGGBB' (or '#AARRGGBB'), a '---' separator, then the char grid ('.' = transparent, skipped). The parsed cells are stamped onto the ACTIVE frame's active cel at (x, y); frame_index optionally targets another frame. x/y must be >= 0; cells landing outside the canvas are clipped and counted (placed/clipped). Read a region, edit the text, draw it back — the vision loop closes.",
+            "v6-sketch",
+            "session_id" to "string", "sketch" to "string", "x" to "integer", "y" to "integer",
+            "frame_index" to "integer",
+            required = listOf("session_id", "sketch"),
+        ) { params, store ->
+            val sketch = params.string("sketch")
+            require(sketch.length <= MAX_SKETCH_TEXT) {
+                "parameter 'sketch' is ${sketch.length} characters, beyond the $MAX_SKETCH_TEXT character cap"
+            }
+            val x = params.opt("x", 0)
+            val y = params.opt("y", 0)
+            require(x >= 0 && y >= 0) { "x/y must be non-negative (was x=$x, y=$y)" }
+            val parsed = SketchParser.parse(sketch)
+            val session = sessionOf(params, store)
+            val project = session.project
+            val frameIndex = optionalInt(params, "frame_index") ?: project.activeFrameIndex
+            if (frameIndex < 0 || frameIndex >= project.frameCount) {
+                throw IllegalArgumentException(
+                    "frame_index $frameIndex outside 0..${project.frameCount - 1} (project has ${project.frameCount} frames)",
+                )
+            }
+            // Materialize the parsed cells as a source raster for the stamp.
+            val sourcePixels = IntArray(parsed.width * parsed.height)
+            for (i in parsed.pixels.indices) {
+                val point = parsed.pixels[i]
+                sourcePixels[point.y * parsed.width + point.x] = parsed.argbs[i]
+            }
+            val source = PixelFrame.of(parsed.width, parsed.height, sourcePixels)
+            val baseCel = project.frames[frameIndex].cels[project.activeLayerId]
+            val stamp = CelStamp.stamp(project.width, project.height, baseCel, source, x, y)
+            val next = if (frameIndex == project.activeFrameIndex) {
+                // Active frame: through the engine so the write carries a
+                // normal undo entry and honors layer locks.
+                lab.engine.applyFrame(project, stamp.cel)
+            } else {
+                // Non-active frame: a project-level cel swap (the engine's
+                // applyFrame only addresses the active frame).
+                project.withCel(project.activeLayerId, frameIndex, stamp.cel)
+            }
+            store.update(session.id, next)
+            jsonobj {
+                for ((key, value) in projectSummary(session.id, next).entries) put(key, value)
+                put("frame_index", frameIndex)
+                put("x", x)
+                put("y", y)
+                put(
+                    "parsed",
+                    jsonobj {
+                        put("width", parsed.width)
+                        put("height", parsed.height)
+                        put("points", parsed.pointCount)
+                    },
+                )
+                put("placed", stamp.placed)
+                put("clipped", stamp.clipped)
             }
         }
 

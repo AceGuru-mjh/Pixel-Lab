@@ -66,8 +66,12 @@ object QoiCodec {
     /** Maximum run length the encoder emits (reference cap). */
     private const val MAX_RUN = 62
 
-    /** Total pixel count guard: raster must fit a flat IntArray. */
-    private const val MAX_PIXELS = Int.MAX_VALUE
+    /**
+     * Total pixel count guard: raster must fit a flat IntArray AND the
+     * untrusted-import budget (the historical Int.MAX_VALUE ceiling was
+     * 8 GB — a 2 MB RUN-op stream already reached 536 MB of IntArray).
+     */
+    private const val MAX_PIXELS = DecodeBudget.MAX_FRAME_PIXELS
 
     /**
      * Encodes [frame] as a complete QOI file.
@@ -207,7 +211,9 @@ object QoiCodec {
             throw QoiDecodeException("QOI end marker missing or wrong at offset $endStart")
         }
 
-        val total = (width * height).toInt()
+        // The header check above caps the raster at MAX_PIXELS (16 M), so
+        // the Int multiply cannot wrap here.
+        val total = width * height
         val out = IntArray(total)
         val index = IntArray(CACHE_SIZE)
         var previous = 0xFF shl 24

@@ -2,12 +2,14 @@ package com.pixellab.ui.theme
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -265,12 +267,17 @@ fun PixelPanel(
             .padding(theme.metrics.panelPadding),
     ) {
         if (title != null) {
-            Row(modifier = Modifier.height(PanelTitleHeight)) {
-                Column(
+            Row(
+                modifier = Modifier.height(PanelTitleHeight),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                // Title notch: a short primary bar anchoring the label.
+                Box(
                     modifier = Modifier
-                        .background(theme.primary, RoundedCornerShape(1.dp))
-                        .padding(horizontal = 2.dp),
-                ) {}
+                        .padding(end = 6.dp)
+                        .size(width = 3.dp, height = 14.dp)
+                        .background(theme.primary, RoundedCornerShape(1.dp)),
+                )
                 Text(
                     text = title,
                     fontSize = 11.sp,

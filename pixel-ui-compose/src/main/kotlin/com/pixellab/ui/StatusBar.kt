@@ -69,7 +69,7 @@ fun StatusBar(
             .background(theme.background)
             .padding(horizontal = BarPadding),
     ) {
-        Segment(theme, "${dims.first}×${dims.second}")
+        Segment(theme, "${dims.first}×${dims.second}", leadingDot = false)
         Segment(theme, cursorText(cursor))
         Segment(theme, "${(zoom * 100f + 0.5f).toInt()}%")
         if (!compact) {
@@ -93,13 +93,13 @@ private fun cursorText(cursor: PixelPoint?): String =
     if (cursor == null) "(—, —)" else "(${cursor.x}, ${cursor.y})"
 
 /**
- * One monospaced status segment, separated by a leading middle dot from its
- * left neighbor (the first segment renders without the dot by host layout).
+ * One monospaced status segment; a leading middle dot separates it from its
+ * left neighbor (the first segment renders without the dot).
  */
 @Composable
-private fun Segment(theme: PixelTheme, text: String) {
+private fun Segment(theme: PixelTheme, text: String, leadingDot: Boolean = true) {
     Text(
-        text = text,
+        text = if (leadingDot) "· $text" else text,
         fontSize = 10.sp,
         color = theme.textSecondary,
         fontFamily = FontFamily.Monospace,

@@ -123,8 +123,9 @@ fun HistoryPanel(
         }
 
         // ---- scrollable list with custom scrollbar -------------------------
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
         Box(modifier = Modifier.heightIn(max = HistoryMaxHeight)) {
-            LazyColumn {
+            LazyColumn(state = listState) {
                 // "Original" pseudo-row: the state before the first entry.
                 item(key = "history-original") {
                     HistoryRow(
@@ -149,7 +150,11 @@ fun HistoryPanel(
                     )
                 }
             }
-            ScrollbarGutter(theme, rows = newestFirst.size + 1)
+            ScrollbarGutter(
+                theme = theme,
+                rows = newestFirst.size + 1,
+                firstVisible = listState.firstVisibleItemIndex,
+            )
         }
     }
 }
@@ -215,18 +220,23 @@ private fun HistoryRow(
 
 /**
  * Custom-drawn scrollbar gutter on the right edge of the list window. The
- * thumb height encodes the visible fraction of rows (top-pinned) — see the
- * [HistoryPanel] KDoc for the stub limitation.
+ * thumb height encodes the visible row fraction and its position tracks the
+ * live list scroll offset.
  */
 @Composable
-private fun ScrollbarGutter(theme: PixelTheme, rows: Int) {
+private fun ScrollbarGutter(theme: PixelTheme, rows: Int, firstVisible: Int) {
     Canvas(modifier = Modifier.size(ScrollbarWidth, HistoryMaxHeight)) {
-        drawRect(color = theme.surface, size = Size(ScrollbarWidth.value, HistoryMaxHeight.value))
+        val gutterPx = size.width
+        val trackPx = size.height
+        drawRect(color = theme.surface, size = Size(gutterPx, trackPx))
         val visibleFraction = (MaxVisibleRows.toFloat() / rows.coerceAtLeast(1)).coerceAtMost(1f)
+        val thumbPx = trackPx * visibleFraction
+        val scrollable = (rows - MaxVisibleRows).coerceAtLeast(0)
+        val progress = if (scrollable == 0) 0f else firstVisible.toFloat() / scrollable
         drawRect(
             color = theme.textDisabled,
-            topLeft = Offset.Zero,
-            size = Size(ScrollbarWidth.value, HistoryMaxHeight.value * visibleFraction),
+            topLeft = Offset(0f, (trackPx - thumbPx) * progress),
+            size = Size(gutterPx, thumbPx),
         )
     }
 }

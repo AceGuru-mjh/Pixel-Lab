@@ -156,6 +156,44 @@ class CanvasState(
     /** Height of the canvas pixel grid being edited; see [canvasWidth]. */
     var canvasHeight: Int by mutableStateOf(0)
 
+    /** Last observed viewport width in screen pixels, `0` before layout. */
+    var viewportWidth: Int by mutableStateOf(0)
+
+    /** Last observed viewport height in screen pixels, `0` before layout. */
+    var viewportHeight: Int by mutableStateOf(0)
+
+    /**
+     * Fits the whole `canvasWidth x canvasHeight` grid inside the last
+     * observed viewport ([viewportWidth] x [viewportHeight]) with a small
+     * margin: the zoom is lowered to the largest power-of-two-ish factor
+     * that fits, and the pan is centered. A no-op when the viewport has not
+     * been measured yet (`0` in either dimension) or the grid is not synced.
+     *
+     * @return true when the view changed.
+     */
+    fun fitToView(): Boolean {
+        if (viewportWidth <= 0 || viewportHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0) {
+            return false
+        }
+        // Margin keeps the frame outline visible against the viewport edge.
+        val marginPx = 16f
+        val availableW = (viewportWidth - marginPx).coerceAtLeast(1f)
+        val availableH = (viewportHeight - marginPx).coerceAtLeast(1f)
+        val fitZoom = minOf(availableW / canvasWidth, availableH / canvasHeight) / BaseCellSize
+        val clamped = clampZoom(fitZoom)
+        val cell = BaseCellSize * clamped
+        zoom = clamped
+        panX = (viewportWidth - canvasWidth * cell) / 2f
+        panY = (viewportHeight - canvasHeight * cell) / 2f
+        return true
+    }
+
+    /** Companion so [fitToView] can share the canvas cell constant. */
+    internal companion object {
+        /** Screen size of one canvas pixel at zoom 1 (matches [PixelCanvasPro]). */
+        internal const val BaseCellSize = 12f
+    }
+
     /**
      * Clamps [z] into the interactive zoom range `1..64` with a logarithmic
      * feel: values that land within [ZoomSnapTolerance] (10%) of a

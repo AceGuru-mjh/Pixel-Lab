@@ -32,6 +32,10 @@ class PixelSessionStore(
     private val onSessionDiscarded: ((sessionId: String) -> Unit)? = null,
 ) {
 
+    init {
+        require(maxSessions >= 1) { "maxSessions must be at least 1 (was $maxSessions)" }
+    }
+
     /** One live MCP editing session. */
     class SessionState(
         /** Session id (the value clients pass as `session_id`). */

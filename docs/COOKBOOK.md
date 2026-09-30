@@ -252,7 +252,7 @@ Sec-WebSocket-Version: 13
 | 场景 | 方式 |
 |:---|:---|
 | Android 宿主引库 | `pixel-core`（纯 JVM）+ 可选 `pixel-ui-compose` |
-| Agent 工具化 | `pixel-mcp`：SSE 或 WebSocket 传输，120 个工具 |
+| Agent 工具化 | `pixel-mcp`：SSE 或 WebSocket 传输，182 个工具 |
 | 持久化 | `ProjectStore(rootDir)`：原子写 + LRU 缓存 + 缩略图 |
 | 直接 Kotlin | `PixelLab.create()` 门面 + 各包公共 API |
 

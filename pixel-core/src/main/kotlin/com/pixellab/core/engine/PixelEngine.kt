@@ -123,8 +123,8 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
      * [thickness] (parallel-offset merge, see [DrawOps.thickLine]).
      * Out-of-bounds points are clipped.
      *
-     * @throws IllegalArgumentException when [thickness] is below 1 or the
-     *   active layer is locked.
+     * @throws IllegalArgumentException when [thickness] is outside
+     *   `1..DrawOps.MAX_THICKNESS` or the active layer is locked.
      */
     fun drawLine(
         project: SpriteProject,
@@ -135,7 +135,9 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         argb: Int,
         thickness: Int = 1,
     ): SpriteProject {
-        require(thickness >= 1) { "thickness must be >= 1 (was $thickness)" }
+        require(thickness in 1..DrawOps.MAX_THICKNESS) {
+            "thickness must be in [1, ${DrawOps.MAX_THICKNESS}] (was $thickness)"
+        }
         val points = DrawOps.thickLine(x0, y0, x1, y1, thickness)
         return editActiveCel(project, "drawLine") { it.withPixels(points, argb) }
     }
@@ -265,8 +267,8 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
      * Bresenham segments of the given [thickness]; a single-point stroke
      * stamps a `thickness x thickness` dot. An empty point list is a no-op.
      *
-     * @throws IllegalArgumentException when [thickness] is below 1 or the
-     *   active layer is locked.
+     * @throws IllegalArgumentException when [thickness] is outside
+     *   `1..DrawOps.MAX_THICKNESS` or the active layer is locked.
      */
     fun drawStroke(
         project: SpriteProject,
@@ -274,7 +276,9 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         argb: Int,
         thickness: Int = 1,
     ): SpriteProject {
-        require(thickness >= 1) { "thickness must be >= 1 (was $thickness)" }
+        require(thickness in 1..DrawOps.MAX_THICKNESS) {
+            "thickness must be in [1, ${DrawOps.MAX_THICKNESS}] (was $thickness)"
+        }
         if (points.isEmpty()) return project
         val stroke = strokePoints(points, thickness)
         return editActiveCel(project, "drawStroke") { it.withPixels(stroke, argb) }
@@ -574,7 +578,15 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
                 val evicted = history.undo.removeFirst() ?: break
                 history.estimatedBytes -= estimateBytes(evicted.after)
             }
+            // Dropping the redo branch must return its bytes to the budget:
+            // phantom bytes otherwise accumulate on every undo->edit cycle
+            // (the records stay counted but unreachable), silently shrinking
+            // the effective undo depth far below the configured budget.
+            for (dropped in history.redo) {
+                history.estimatedBytes -= estimateBytes(dropped.after)
+            }
             history.redo.clear()
+            if (history.estimatedBytes < 0) history.estimatedBytes = 0
         }
         return after
     }

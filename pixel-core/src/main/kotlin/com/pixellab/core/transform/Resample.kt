@@ -60,8 +60,14 @@ object Resample {
         if (frame.width == newWidth && frame.height == newHeight) return frame
         val w = frame.width
         val h = frame.height
+        // Long-domain guard: `newWidth * newHeight` as Int can wrap negative
+        // (NegativeArraySizeException) or silently allocate gigabytes.
+        val outPixels = newWidth.toLong() * newHeight.toLong()
+        require(outPixels <= 268_435_456L) {
+            "resample target ${newWidth}x${newHeight} ($outPixels px) exceeds the 268M pixel budget"
+        }
         val src = frame.pixels
-        val out = IntArray(newWidth * newHeight)
+        val out = IntArray(outPixels.toInt())
         val xRatio = w.toDouble() / newWidth
         val yRatio = h.toDouble() / newHeight
         for (y in 0 until newHeight) {
@@ -82,10 +88,11 @@ object Resample {
                     out[y * newWidth + x] = src[sy * w + sx]
                     continue
                 }
-                var accA = 0L
-                var accR = 0L
-                var accG = 0L
-                var accB = 0L
+                var accA = 0.0
+                var accR = 0.0
+                var accG = 0.0
+                var accB = 0.0
+                var totalWeight = 0.0
                 var count = 0
                 for (sy in sy0 until sy1) {
                     // Vertical coverage weight of this row inside the cell.
@@ -98,16 +105,26 @@ object Resample {
                         if (colIn <= 0.0) continue
                         val weight = rowIn * colIn
                         val p = src[sy * w + sx]
-                        val a = p ushr 24
-                        accA += (a * weight).toLong()
-                        accR += ((p ushr 16 and 0xFF) * a / 255.0 * weight).toLong()
-                        accG += ((p ushr 8 and 0xFF) * a / 255.0 * weight).toLong()
-                        accB += ((p and 0xFF) * a / 255.0 * weight).toLong()
+                        val a = (p ushr 24).toDouble()
+                        val pm = a / 255.0
+                        accA += a * weight
+                        accR += (p ushr 16 and 0xFF) * pm * weight
+                        accG += (p ushr 8 and 0xFF) * pm * weight
+                        accB += (p and 0xFF) * pm * weight
+                        totalWeight += weight
                         count++
-                        if (count > 255) break // pathological safety valve
                     }
+                    // No sample cap: the cells tile the source, so total work
+                    // is O(max(src, dst) pixels) for ANY ratio — the old
+                    // 256-sample valve silently dropped covered pixels for
+                    // extreme downscales (a 1024->1 "average" was computed
+                    // from the top-left 256 pixels only).
                 }
-                out[y * newWidth + x] = if (count == 0) 0 else packAverage(accA, accR, accG, accB, count)
+                out[y * newWidth + x] = if (count == 0 || totalWeight <= 0.0) {
+                    0
+                } else {
+                    packWeightedAverage(accA, accR, accG, accB, totalWeight)
+                }
             }
         }
         return PixelFrame.of(newWidth, newHeight, out)
@@ -173,6 +190,28 @@ object Resample {
             }
         }
         return PixelFrame.of(newW, newH, out)
+    }
+
+    /**
+     * Packs COVERAGE-WEIGHTED premultiplied accumulations back into straight
+     * ARGB: the output alpha divides by the summed weight (not the sample
+     * count), so a fully opaque source stays opaque at ANY scale — the old
+     * count division faded alpha by the coverage factor (2x upscale left
+     * alpha 63/255, 4x left 16).
+     */
+    private fun packWeightedAverage(accA: Double, accR: Double, accG: Double, accB: Double, totalWeight: Double): Int {
+        if (totalWeight <= 0.0) return 0
+        val aFloat = accA / totalWeight
+        val a = (aFloat + 0.5).toInt().coerceIn(0, 255)
+        if (a == 0 || accA <= 0.0) return 0
+        // Un-premultiply: channel sums were premultiplied by per-pixel alpha
+        // AND the coverage weight; divide by the accumulated (weighted)
+        // alpha for the straight-color mean.
+        val fa = accA
+        val ur = ((accR / fa * 255.0).toInt()).coerceIn(0, 255)
+        val ug = ((accG / fa * 255.0).toInt()).coerceIn(0, 255)
+        val ub = ((accB / fa * 255.0).toInt()).coerceIn(0, 255)
+        return a shl 24 or (ur shl 16) or (ug shl 8) or ub
     }
 
     /** Packs accumulated premultiplied averages back into straight ARGB. */

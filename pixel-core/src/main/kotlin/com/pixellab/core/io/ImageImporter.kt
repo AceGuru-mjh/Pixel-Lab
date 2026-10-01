@@ -248,8 +248,12 @@ object ImageImporter {
         val distinct = LinkedHashMap<Int, Unit>()
         for (frame in frames) {
             for (argb in frame.pixels) {
-                if ((argb ushr 24) == 0) continue
-                distinct.putIfAbsent(argb, Unit)
+                // Opaque only (per the KDoc): semi-transparent pixels used to
+                // enter the palette with alpha 1..254, where quantizers treat
+                // alpha < 0x80 as transparent — dead weight and inconsistent
+                // with the "palette entries are opaque" invariant.
+                if ((argb ushr 24) < 0x80) continue
+                distinct.putIfAbsent(0xFF shl 24 or (argb and 0xFFFFFF), Unit)
                 if (distinct.size > PALETTE_HINT_CAP) return null
             }
         }

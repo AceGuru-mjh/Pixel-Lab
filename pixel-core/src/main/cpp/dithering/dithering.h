@@ -1,5 +1,7 @@
-// Dithering kernels: Floyd-Steinberg, Atkinson, ordered Bayer 2x2/4x4/8x8
-// and checkerboard. Semantics match convert/KotlinDitherer.kt exactly:
+// Dithering kernels: Floyd-Steinham, Atkinson, ordered Bayer 2x2/4x4/8x8
+// and checkerboard. Structural semantics match convert/KotlinDitherer.kt;
+// outputs are NOT byte-identical (nearest-color here is squared-RGB vs the
+// Kotlin CIELAB, error accumulation truncates vs half-up):
 //  - intensity is clamped to [0, 1] (NaN becomes 0);
 //  - error diffusion runs left-to-right without serpentine, three-row
 //    rolling buffers, errors dropped at borders and on transparent targets;

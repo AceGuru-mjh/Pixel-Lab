@@ -194,7 +194,12 @@ object QoiCodec {
         if (width <= 0 || height <= 0) {
             throw QoiDecodeException("QOI dimensions ${width}x${height} are non-positive")
         }
-        if (width > MAX_PIXELS || height > MAX_PIXELS || width.toLong() * height > MAX_PIXELS) {
+        // Same dimension discipline as every other decoder: per-edge
+        // ceiling plus the total budget (a 1M-wide single-row raster used
+        // to pass the pixel-only check and flow into paths shaped for
+        // square-ish rasters).
+        DecodeBudget.checkFrame("QOI", width, height) { QoiDecodeException(it) }
+        if (width.toLong() * height > MAX_PIXELS) {
             throw QoiDecodeException("QOI raster $width x $height exceeds the IntArray limit")
         }
         val channels = bytes[12].toInt() and 0xFF

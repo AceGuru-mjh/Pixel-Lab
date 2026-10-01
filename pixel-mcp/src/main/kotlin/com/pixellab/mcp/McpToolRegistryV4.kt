@@ -10,6 +10,7 @@ import com.pixellab.core.analysis.ConvolutionAlphaMode
 import com.pixellab.core.analysis.ConvolutionEdgeMode
 import com.pixellab.core.analysis.ConvolutionKernel
 import com.pixellab.core.analysis.ConvolutionOps
+import com.pixellab.core.analysis.CraftHealer
 import com.pixellab.core.analysis.HistogramOps
 import com.pixellab.core.analysis.ImageMetrics
 import com.pixellab.core.analysis.MorphShape
@@ -44,6 +45,7 @@ import com.pixellab.core.transform.XbrScale
 import com.pixellab.core.vector.MarchingSquares
 import com.pixellab.core.vector.SvgExporter
 import com.pixellab.mcp.json.JsonArray
+import com.pixellab.mcp.json.JsonBoolean
 import com.pixellab.mcp.json.JsonNull
 import com.pixellab.mcp.json.JsonNumber
 import com.pixellab.mcp.json.JsonObject
@@ -56,13 +58,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Fourth-tier MCP tool registry for Pixel Lab: 32 additional tools
+ * Fourth-tier MCP tool registry for Pixel Lab: 33 additional tools
  * exposing the round-4 capability suites to agents —
  *
- *  * **v4-analysis** (10) — histograms, Otsu thresholds, equalize /
+ *  * **v4-analysis** (11) — histograms, Otsu thresholds, equalize /
  *    auto-levels / binarize, convolution, morphology, connected
  *    components, image metrics (MAE/PSNR) and the pixel-art craft
- *    auditor with its 0-100 score.
+ *    auditor with its 0-100 score plus the audit-driven [CraftHealer]
+ *    (frame_heal) that closes the audit → repair loop.
  *  * **v4-transform** (6) — RotSprite arbitrary-angle rotation, the
  *    AdvMAME/EPX/xBR integer upscales, half-pixel-centered resampling
  *    and mipmap chains.
@@ -293,6 +296,18 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
     private fun strParam(params: JsonObject, key: String, default: String): String = when (val raw = params.raw(key)) {
         is JsonString -> raw.value.trim().lowercase()
         else -> default
+    }
+
+    /** Boolean parameter accepting `true`/`false` strings or JSON booleans. */
+    private fun boolParam(params: JsonObject, key: String, default: Boolean): Boolean = when (val raw = params.raw(key)) {
+        null, is JsonNull -> default
+        is JsonBoolean -> raw.value
+        is JsonString -> when (raw.value.trim().lowercase()) {
+            "true", "1", "yes", "on" -> true
+            "false", "0", "no", "off" -> false
+            else -> throw IllegalArgumentException("parameter '$key' must be a boolean")
+        }
+        else -> throw IllegalArgumentException("parameter '$key' must be a boolean")
     }
 
     /** Chooses the seed (default 0) with 64-bit range. */
@@ -558,6 +573,56 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
                     put("holes", num(report.stats.holeCount.toLong()))
                 })
                 put("suggestions", jsonarray { for (s in report.suggestions) add(JsonString(s)) })
+            }
+        }
+
+        add("frame_heal", "Applies the audit-driven craft healer to the active cel: clears dust pixels and tiny clusters, fills enclosed holes with the majority boundary color, and bridges broken corners / accidental checkers with orthogonal support pixels — then re-audits and commits the healed frame (a net-negative pass is rolled back unless require_no_regression=false). Closes the frame_audit loop: audit, heal, re-audit in one call.", "v4-analysis",
+            "session_id" to "string", "tiny_cluster_area" to "integer", "similar_tolerance" to "integer",
+            "fix_isolated" to "boolean", "fix_tiny_clusters" to "boolean", "fix_holes" to "boolean",
+            "fix_broken_corners" to "boolean", "fix_checkers" to "boolean", "require_no_regression" to "boolean",
+            required = listOf("session_id")) { params, store ->
+            val config = AuditConfig(
+                tinyClusterArea = intParam(params, "tiny_cluster_area", 2),
+                similarColorTolerance = intParam(params, "similar_tolerance", 24),
+            )
+            val options = CraftHealer.HealOptions(
+                fixIsolated = boolParam(params, "fix_isolated", true),
+                fixTinyClusters = boolParam(params, "fix_tiny_clusters", true),
+                fixHoles = boolParam(params, "fix_holes", true),
+                fixBrokenCorners = boolParam(params, "fix_broken_corners", true),
+                fixCheckers = boolParam(params, "fix_checkers", true),
+                requireNoRegression = boolParam(params, "require_no_regression", true),
+            )
+            val session = sessionOf(params, store)
+            val before = session.project
+            val cel = requireActiveCel(before)
+            val report = CraftHealer.heal(cel, config, options)
+            // A rolled-back or byte-identical heal leaves the project
+            // untouched: no history entry, no store write.
+            val changed = report.allApplied && report.frame != cel
+            val after = if (changed) before.withActiveCel(report.frame) else before
+            if (changed) {
+                historyFor(session.id).record(V4Command("frame_heal"), before, after)
+                requireNotNull(store.update(session.id, after)) { "session '${session.id}' vanished" }
+            }
+            jsonobj {
+                put("session_id", session.id)
+                put("project_id", after.id)
+                put("applied", changed)
+                put("all_applied", report.allApplied)
+                put("rolled_back", !report.allApplied)
+                put("score_before", num(report.before.score.toLong()))
+                put("score_after", num(report.after.score.toLong()))
+                put("score_delta", num(report.scoreDelta.toLong()))
+                put("total_fixed", num(report.totalFixed.toLong()))
+                put("fixed", jsonobj {
+                    for ((rule, count) in report.fixed) {
+                        put(rule.name.lowercase(), num(count.toLong()))
+                    }
+                })
+                put("remaining_findings", num(report.after.findings.size.toLong()))
+                put("active_frame_index", after.activeFrameIndex)
+                put("undo_depth", num(historyFor(session.id).undoDepth().toLong()))
             }
         }
 

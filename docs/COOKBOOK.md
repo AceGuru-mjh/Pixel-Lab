@@ -16,6 +16,7 @@
 10. [游戏图标一键导出（ICO 多尺寸）](#10-游戏图标一键导出ico-多尺寸)
 11. [流水线配方：可复用的转换预设](#11-流水线配方可复用的转换预设)
 12. [握手 WebSocket 传输](#12-握手-websocket-传输)
+13. [审计 → 修复一调用闭环](#13-审计--修复一调用闭环)
 
 ---
 
@@ -304,3 +305,24 @@ Sec-WebSocket-Version: 13
 2. + 每帧手绘/生成 → export_svg_animated(frame_duration_ms=100, loop=true)
    → 任何纯 SVG 渲染器直接播放
 ```
+
+## 13. 审计 → 修复一调用闭环
+
+**目标**：Agent 画完后自查工艺（尘点/断角/意外棋盘/封闭洞/微簇），并让修复**直接落盘**——不再需要手工拼 morphology 参数。这是 `frame_audit` 与 `frame_heal` 的组合拳：审计、修复、复审一次往返。
+
+```
+1. draw_pixels(session_id=<sid>, points=[...], color="#ff3366")  # 正常作画（含误笔尘点）
+2. frame_audit(session_id=<sid>)
+   → score=87, findings=[{rule:"isolated_pixel", x:6, y:0, ...}], suggestions=[...]
+3. frame_heal(session_id=<sid>)
+   → applied=true, score_before=87, score_after=100, score_delta=13,
+     fixed={"isolated_pixel":1}, remaining_findings=0, undo_depth=2
+4. canvas_read(session_id=<sid>, width=8, height=8, format="rle")   # 复核像素（V5 视觉闭环）
+5. project_undo(session_id=<sid>)                                    # 不满意？一步撤销整个 heal
+```
+
+**要点**：
+- `frame_heal` 只动被审计标记的像素，绝不重写整幅光栅；修复顺序固定（尘点 → 微簇 → 填洞 → 断角/棋盘），同输入同输出字节（确定性）。
+- 默认 `require_no_regression=true`：复审分数下降的净负修复自动整体回滚（`applied=false`），返回原始帧与两侧审计。
+- 每条规则可独立关闸：`fix_holes=false` 保留"眼睛/透气孔"这类**有意**的洞。
+- 整个 heal 是一条 undo 记录；与 `draw_batch` 检查点、`session_save` 组合即得"画 → 查 → 修 → 存"的完整守护链。

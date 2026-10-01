@@ -6,7 +6,7 @@ pixel-lab/
 │   └── src/main/kotlin/com/pixellab/core/
 │       ├── model/                   # PixelFrame · SpriteProject · Frame · Layer · Palette · CodexPetSpec（冻结层）
 │       ├── palette/                 # BuiltInPalettes（6 套）· LabColor（CIELAB）
-│       ├── engine/                  # PixelEngine（28 API + 撤销栈）· DrawOps（几何）· FloodFill（扫描线）
+│       ├── engine/                  # PixelEngine（32 API + 撤销栈）· DrawOps（几何）· FloodFill（扫描线）
 │       ├── animation/               # AnimationEngine（帧/FPS/标签/洋葱皮/呼吸）
 │       ├── template/                # TemplateEngine · FontData（5×7 + 8×8 全 ASCII）· TemplateLibrary（6 模板）
 │       ├── convert/                 # ImageConverter 管线 · Quantizer/Ditherer 门面 · Kotlin 回退 ×2

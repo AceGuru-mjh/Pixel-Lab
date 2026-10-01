@@ -10,7 +10,7 @@
 |:---|:---|:---|
 | `pixel-core` | 主战场 | 数据模型（PixelFrame/SpriteProject）、绘制引擎+撤销栈、动画引擎、模板/字体、量化/抖动/转换管线、PNG/GIF/APNG/精灵表/Codex 宠物包导出、C++/NDK 热路径 |
 | `pixel-ui-compose` | Compose 原子组件 | PixelCanvas（缩放/平移/笔画预览/洋葱皮/网格）、PalettePanel、TimelineStrip、LayerPanel |
-| `pixel-mcp` | MCP 服务器 | JSON-RPC 2.0 over SSE + 可选 WebSocket、六层注册表 182 工具（tier-chain 路由）、会话存储、零外部依赖（手写 HTTP/SSE/WS/JSON） |
+| `pixel-mcp` | MCP 服务器 | JSON-RPC 2.0 over SSE + 可选 WebSocket、六层注册表 183 工具（tier-chain 路由）、会话存储、零外部依赖（手写 HTTP/SSE/WS/JSON） |
 | `sample-app` | 演示 | 单 Activity 全功能画板 + Agent 指令行 + 四格式导出 |
 
 ## 快速开始
@@ -99,7 +99,7 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #54 | **引擎正确性**：JNI 输入缓冲别名污染（mode-0 回写改写调用方不可变帧数组）、removeLayer 单趟构造（含内容图层必抛 IAE）、isModified 状态锚、checkpoint 双锚（分叉/驱逐诚实失败）、slot 快照版本化、载入边界清历史、撤销字节预算、并发安全 | +753 行 |
 | PR #55 | **IO 解码器加固**：统一导入预算（边 16384/帧 16.7M/总量 33.5M 像素）封死 PNG/GIF/BMP/QOI/Aseprite 全部「小文件→数 GB 分配」路径 + Long 域算术 + 链式 cel 深度上限 + V4/V5 截断守卫 | +367 行 |
 | PR #56 | **传输层加固**：Bearer token 准入（401/415/411——封死 loopback 共享与 text/plain CSRF）、8MB 增量请求体、JSON 200K 节点预算、SSE 有界队列写（慢客户端断开而非挂死服务器）、专用 accept 线程 + 128 连接上限、WS 握手期上限、RFC 9112 严格化（行内 CR 走私/trailer 上限/请求行校验） | +621 行 |
-| **合计** | | **58,900+ 行**（Kotlin 56,800+ + C++ 2,142+），**182 个 MCP 工具**，**369 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
+| **合计** | | **59,500+ 行**（Kotlin 57,400+ + C++ 2,132+），**183 个 MCP 工具**，**409 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

@@ -516,7 +516,13 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val session = sessionOf(params, store)
             val text = String(bytesParam(params), Charsets.UTF_8)
             val decoded = ProjectCodec.load(text)
-            val project = decoded.copy(name = params.opt("name", decoded.name))
+            // Same wire bytes into two sessions would otherwise reuse one
+            // project id (shared engine undo stack) — mint a fresh id.
+            val project = decoded.copy(
+                id = com.pixellab.core.model.SpriteFactory.defaultId(),
+                name = params.opt("name", decoded.name),
+            )
+            lab.engine.clearHistory(session.project.id)
             commit(store, session, "io_import_project", session.project, project)
             projectSummary(session, project)
         }

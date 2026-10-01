@@ -997,9 +997,17 @@ class McpToolRegistry(private val lab: PixelLab) {
         add("template_apply", "Instantiates a built-in template into a session (new session when omitted).", "template",
             "template_id" to "string", "palette_id" to "string", "session_id" to "string",
             required = listOf("template_id")) { params, store ->
-            val project = lab.template.apply(params.string("template_id"), paletteParam(params))
+            val built = lab.template.apply(params.string("template_id"), paletteParam(params))
+            // Template projects carry a DETERMINISTIC id ("tpl-<id>"); two
+            // sessions applying the same template would otherwise share one
+            // engine undo stack and evict-clear each other's history.
+            // Every application mints a fresh document id instead.
+            val project = built.copy(id = com.pixellab.core.model.SpriteFactory.defaultId())
             val session = if (params.has("session_id")) {
                 val existing = sessionOf(params, store)
+                // Replacement boundary: history keyed by the previous
+                // project id describes the old document lineage.
+                lab.engine.clearHistory(existing.project.id)
                 requireNotNull(store.update(existing.id, project)) { "session '${existing.id}' vanished" }
             } else {
                 store.newSession(project.palette, project.width, project.height, project.name).also {

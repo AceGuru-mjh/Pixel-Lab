@@ -64,7 +64,7 @@ private const val StoreDirName: String = "pixel-lab"
  * This is the second half of the host-integration story (the first half
  * is the gallery/editor in [AppRoot]): Android-Guru-Agent — or any
  * MCP-capable client on the same device — points at
- * `http://127.0.0.1:8901/mcp` and gains all 174 tools. The persistence
+ * `http://127.0.0.1:8901/mcp` and gains all 183 tools. The persistence
  * root is the **same** directory [AppRoot] uses, so art saved through the
  * agent (`session_save`) appears in the human gallery, and vice versa.
  *
@@ -212,7 +212,7 @@ fun McpServerPanel(
                     StatusRow("Persistence", persistenceRoot.absolutePath)
                 } else {
                     Text(
-                        "Flip the switch to boot the server with 174 tools and disk persistence.",
+                        "Flip the switch to boot the server with 183 tools and disk persistence.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

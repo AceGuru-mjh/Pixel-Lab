@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -225,7 +226,10 @@ private fun HistoryRow(
  */
 @Composable
 private fun ScrollbarGutter(theme: PixelTheme, rows: Int, firstVisible: Int) {
-    Canvas(modifier = Modifier.size(ScrollbarWidth, HistoryMaxHeight)) {
+    // fillMaxHeight (the Box sizes to the LazyColumn's content, capped at
+    // HistoryMaxHeight): the fixed 320dp child forced the panel to its full
+    // height even with two entries.
+    Canvas(modifier = Modifier.fillMaxHeight().width(ScrollbarWidth)) {
         val gutterPx = size.width
         val trackPx = size.height
         drawRect(color = theme.surface, size = Size(gutterPx, trackPx))

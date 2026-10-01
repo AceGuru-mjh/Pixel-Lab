@@ -5,11 +5,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 import com.pixellab.ui.theme.PixelTheme
 
@@ -272,6 +274,12 @@ fun ShortcutLayer(
     val currentOnShortcut = rememberUpdatedState(onShortcut)
     Box(
         modifier = modifier.onKeyEvent { event: KeyEvent ->
+            // Dispatch on the initial press ONLY: Compose delivers KeyDown,
+            // KeyRepeat AND KeyUp to onKeyEvent, so without this gate every
+            // shortcut double-fired (Ctrl+Z undid TWO steps, X swapped
+            // colors back, arrows nudged 2px) and key-up leaked through
+            // focused text fields whose KeyDown they had consumed.
+            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
             val label = keyLabelOf(event)
             val shortcut = map.findShortcut(
                 label,

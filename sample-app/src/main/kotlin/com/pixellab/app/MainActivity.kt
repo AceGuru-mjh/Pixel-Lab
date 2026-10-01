@@ -334,7 +334,7 @@ fun PixelLabSampleApp() {
         scope.launch {
             try {
                 val result = doExport(kind, lab, project, dir)
-                report("${kind.label} saved: ${result.file.name} (${result.byteCount} B)")
+                report("${kind.label} saved: ${result.file.absolutePath} (${result.byteCount} B)")
             } catch (error: Exception) {
                 report("Export failed: ${error.message}")
             } finally {

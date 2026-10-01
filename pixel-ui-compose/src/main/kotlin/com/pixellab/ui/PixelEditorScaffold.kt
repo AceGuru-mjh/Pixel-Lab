@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -72,20 +73,43 @@ private fun SuiteMaterialTheme(
 ) {
     val dark = theme.scheme == ThemeScheme.DARK
     val scheme = if (dark) darkColorScheme() else lightColorScheme()
+    // Contrast-aware ink for filled slots: an amber/teal primary needs
+    // near-black content (near-white text was ~1.5:1 against #FFB454);
+    // the outline must stay visible on dark surfaces (textDisabled
+    // measured ~2.6:1).
+    val onFilled = if (dark) {
+        androidx.compose.ui.graphics.Color(0xFF14161A.toInt())
+    } else {
+        androidx.compose.ui.graphics.Color(0xFFF2EDE4.toInt())
+    }
     MaterialTheme(
         colorScheme = scheme.copy(
             primary = theme.primary,
-            onPrimary = theme.colors.textPrimary.argbColor(),
+            onPrimary = onFilled,
             secondary = theme.accent,
+            onSecondary = onFilled,
             tertiary = theme.accent,
+            onTertiary = onFilled,
             background = theme.background,
             onBackground = theme.textPrimary,
             surface = theme.surface,
             onSurface = theme.textPrimary,
+            // Container slots: leaving them at the M3 baseline produced
+            // purple selected-chip/selected-row patches inside the suite
+            // (the exact ambient scheme this bridge exists to eliminate).
             surfaceVariant = theme.elevated,
             onSurfaceVariant = theme.textSecondary,
+            primaryContainer = theme.elevated,
+            onPrimaryContainer = theme.textPrimary,
+            secondaryContainer = theme.surface,
+            onSecondaryContainer = theme.textPrimary,
+            tertiaryContainer = theme.elevated,
+            onTertiaryContainer = theme.textPrimary,
+            errorContainer = theme.elevated,
+            onErrorContainer = theme.textPrimary,
             error = theme.danger,
-            outline = theme.textDisabled,
+            outline = theme.textSecondary,
+            outlineVariant = theme.textDisabled,
         ),
         content = content,
     )
@@ -170,12 +194,20 @@ fun PixelEditorScaffold(
     }
 
     // ---- view state -------------------------------------------------------
-    val canvasState = remember { CanvasState() }
-    var primaryColor by remember { mutableStateOf(session.project.palette[0]) }
-    var secondaryColor by remember { mutableStateOf(0xFF000000.toInt()) }
-    var paletteIndex by remember { mutableStateOf(0) }
-    var cursor by remember { mutableStateOf<PixelPointerInfo?>(null) }
-    var playback by remember {
+    // All view state keys on the document id: the KDoc promises "a different
+    // project id resets the session (fresh history)" — without keys here a
+    // host swapping the document in place kept the previous project's
+    // colors, playhead and possibly out-of-bounds selection.
+    val canvasState = remember(project.id) { CanvasState() }
+    var primaryColor by remember(project.id) { mutableStateOf(session.project.palette[0]) }
+    var secondaryColor by remember(project.id) { mutableStateOf(0xFF000000.toInt()) }
+    var paletteIndex by remember(project.id) { mutableStateOf(0) }
+    // Cursor readout lives in a plain State holder handed to the leaf
+    // readers: writing a root-level remember per pointer move used to
+    // recompose the ENTIRE scaffold (tool rail, panels, timeline) at up to
+    // touch frequency.
+    val cursorState = remember { mutableStateOf<PixelPointerInfo?>(null) }
+    var playback by remember(project.id) {
         mutableStateOf(
             PlaybackState(frameIndex = project.activeFrameIndex, fps = project.fps),
         )
@@ -236,12 +268,17 @@ fun PixelEditorScaffold(
     }
 
     // ---- playback clock ---------------------------------------------------
-    LaunchedEffect(playback.playing, liveProject) {
+    // Keyed on `playing` ONLY: keying on liveProject restarted the effect
+    // on every edit (a new project instance per stroke), resetting the
+    // current frame's full delay — a stream of edits stalled playback.
+    val liveProjectNow = rememberUpdatedState(liveProject)
+    LaunchedEffect(playback.playing) {
         while (playback.playing) {
-            val index = playback.frameIndex.coerceIn(0, liveProject.frameCount - 1)
-            val tick = liveProject.effectiveFrameDuration(index).coerceAtLeast(MinTickMs)
+            val project = liveProjectNow.value
+            val index = playback.frameIndex.coerceIn(0, project.frameCount - 1)
+            val tick = project.effectiveFrameDuration(index).coerceAtLeast(MinTickMs)
             delay(tick.toLong())
-            playback = controller.advance(liveProject, playback, tick)
+            playback = controller.advance(project, playback, tick)
         }
     }
 
@@ -443,7 +480,7 @@ fun PixelEditorScaffold(
                 StatusBar(
                     theme = theme,
                     dims = liveProject.width to liveProject.height,
-                    cursor = cursor?.let { PixelPoint(it.x, it.y) },
+                    cursor = cursorState.value?.let { PixelPoint(it.x, it.y) },
                     zoom = canvasState.zoom,
                     activeLayer = liveProject.activeLayer.name,
                     toolName = canvasState.tool.name.lowercase(),
@@ -550,9 +587,10 @@ fun PixelEditorScaffold(
                             }
                         }
                     },
-                    onCursorMove = { cursor = it },
+                    onCursorMove = { cursorState.value = it },
                     strokeColor = primaryColor,
                     playing = playback.playing,
+                    onionAlpha = playback.onionAlpha / 255f,
                 )
             }
             val preview: @Composable () -> Unit = {

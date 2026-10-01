@@ -195,6 +195,8 @@ fun PixelCanvasPro(
     strokePreview: List<PixelPoint> = emptyList(),
     shapePreview: List<PixelPoint>? = null,
     playing: Boolean = false,
+    /** Onion-skin ghost opacity `0..1`; the timeline slider finally reaches the ghosts. */
+    onionAlpha: Float = 0.3f,
     theme: PixelTheme = LocalPixelTheme.current,
 ) {
     val currentProject = rememberUpdatedState(project)
@@ -469,6 +471,14 @@ fun PixelCanvasPro(
                         }
                         val pressedCount = event.changes.count { it.pressed }
 
+                        // Claim active gestures: without consuming the
+                        // changes, the compact layout's verticalScroll
+                        // interprets the same motion after touch slop and
+                        // the whole editor scrolls WHILE the stroke draws.
+                        if (mode !is GestureMode.Passive) {
+                            change.consume()
+                        }
+
                         if (handedOff) {
                             if (!change.pressed || pressedCount == 0) tracking = false
                             continue
@@ -559,12 +569,21 @@ fun PixelCanvasPro(
             }
             .pointerInput(state) {
                 // Two-finger pan/zoom; pan applies only with 2+ pointers down.
-                detectTransformGestures { _, pan, zoomFactor, _ ->
+                // Zoom anchors at the gesture CENTROID (the discarded first
+                // parameter): scaling around the canvas origin let the
+                // content under the fingers slide away during a pinch.
+                detectTransformGestures { centroid, pan, zoomFactor, _ ->
                     if (currentPlaying.value) return@detectTransformGestures
-                    state.zoom = state.clampZoom(state.zoom * zoomFactor)
+                    val oldZoom = state.zoom
+                    val newZoom = state.clampZoom(oldZoom * zoomFactor)
+                    state.zoom = newZoom
                     if (activePointers.value >= 2) {
-                        state.panX += pan.x
-                        state.panY += pan.y
+                        // Focal-point math: keep the canvas point under the
+                        // centroid stationary while the scale changes, then
+                        // apply the gesture pan.
+                        val scale = if (oldZoom > 0f) newZoom / oldZoom else 1f
+                        state.panX = centroid.x - (centroid.x - state.panX) * scale + pan.x
+                        state.panY = centroid.y - (centroid.y - state.panY) * scale + pan.y
                     }
                 }
             },
@@ -604,13 +623,16 @@ fun PixelCanvasPro(
             }
         }
 
-        // 2. Onion skins ghosted underneath the main frame.
+        // 2. Onion skins ghosted underneath the main frame. The host's
+        // onionAlpha (timeline slider) drives the ghosts; the previous
+        // frame stays slightly stronger than the next, as before.
+        val alphaBase = onionAlpha.coerceIn(0f, 1f)
         onionSkins.first?.let {
             drawImage(
                 it,
                 dstOffset = dstTopLeft,
                 dstSize = dstSize,
-                alpha = OnionPreviousAlpha,
+                alpha = alphaBase,
                 filterQuality = FilterQuality.None,
             )
         }
@@ -619,7 +641,7 @@ fun PixelCanvasPro(
                 it,
                 dstOffset = dstTopLeft,
                 dstSize = dstSize,
-                alpha = OnionNextAlpha,
+                alpha = alphaBase * (OnionNextAlpha / OnionPreviousAlpha),
                 filterQuality = FilterQuality.None,
             )
         }
@@ -714,20 +736,29 @@ fun PixelCanvasPro(
                     antCell(right - 1, y, k++)
                 }
             }
-            // Move-drag ghost: the selected content drawn at its translated
-            // position (clip = in-bounds part), so the preview matches what a
-            // commit will paint. Drawn last so it covers the moved ants.
+            // Move-drag ghost: the ORIGINAL selection's content drawn at its
+            // translated position (clip = in-bounds part), so the preview
+            // matches what a commit will paint. The rect bounds above are
+            // already the TRANSLATED selection — iterating them while adding
+            // the offset again sampled the wrong pixels at double speed.
+            // Drawn last so it covers the moved ants.
             val (offX, offY) = selectionOffset.value
             if (offX != 0f || offY != 0f) {
                 val src = currentFrame.value
-                if (src != null) {
-                    for (y in top until bottom) {
-                        for (x in left until right) {
-                            if (x < 0 || y < 0 || x >= p.width || y >= p.height) continue
+                val original = gestureStartSelection.value
+                if (src != null && original != null) {
+                    val oLeft = original.left.toInt().coerceIn(0, p.width)
+                    val oTop = original.top.toInt().coerceIn(0, p.height)
+                    val oRight = original.right.toInt().coerceIn(0, p.width)
+                    val oBottom = original.bottom.toInt().coerceIn(0, p.height)
+                    val dx = offX.toInt()
+                    val dy = offY.toInt()
+                    for (y in oTop until oBottom) {
+                        for (x in oLeft until oRight) {
                             val color = src[x, y]
                             if (color == 0) continue
-                            val tx = x + offX.toInt()
-                            val ty = y + offY.toInt()
+                            val tx = x + dx
+                            val ty = y + dy
                             if (tx < 0 || ty < 0 || tx >= p.width || ty >= p.height) continue
                             drawRect(
                                 color = Color(color),

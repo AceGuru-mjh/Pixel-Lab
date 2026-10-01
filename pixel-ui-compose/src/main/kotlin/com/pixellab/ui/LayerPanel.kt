@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.focus.onFocusChanged
 import com.pixellab.core.model.Layer
 import com.pixellab.core.model.SpriteProject
 import kotlin.math.roundToInt
@@ -78,7 +79,7 @@ private val LayerMetaFontSize = 12.sp
  * @param onAddLayer invoked with a proposed name for the new layer.
  * @param onRemoveLayer invoked with the id of the active layer to delete.
  * @param onRenameLayer contract callback; this panel intentionally renders
- * the layer name as static text, so the parameter is accepted but unused.
+ * the selected row's inline rename editor (IME Done or focus loss).
  * @param onMoveLayer invoked with (layer id, target bottom-up index).
  * @param onLayerOpacityChange invoked with (layer id, new opacity in 0..1).
  * @param onLayerVisibleChange invoked with (layer id, new visibility).
@@ -208,7 +209,14 @@ private fun LayerRow(
                 onValueChange = { nameDraft = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
+                    .padding(horizontal = 4.dp)
+                    // Commit on focus loss too (tapping another layer used to
+                    // dispose the draft silently — Done was the only commit).
+                    .onFocusChanged { focused ->
+                        if (!focused && nameDraft.isNotBlank() && nameDraft.trim() != layer.name) {
+                            onRenameLayer(layer.id, nameDraft.trim())
+                        }
+                    },
                 singleLine = true,
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = LayerNameFontSize),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),

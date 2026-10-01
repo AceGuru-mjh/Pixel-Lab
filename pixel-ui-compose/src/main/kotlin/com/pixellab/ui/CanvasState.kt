@@ -181,8 +181,19 @@ class CanvasState(
         val availableH = (viewportHeight - marginPx).coerceAtLeast(1f)
         val fitZoom = minOf(availableW / canvasWidth, availableH / canvasHeight) / BaseCellSize
         val clamped = clampZoom(fitZoom)
-        val cell = BaseCellSize * clamped
-        zoom = clamped
+        // Snap-down only: clampZoom's rung snapping rounds UP when the fit
+        // lands within 10% above a power of two, which re-cropped the frame
+        // the fit was supposed to show (the rung is up to ~11% larger than
+        // the viewport allows).
+        val fitClamped = if (clamped > fitZoom) {
+            var rung = MaxZoom
+            while (rung > MinZoom && rung > fitZoom) rung /= 2f
+            rung
+        } else {
+            clamped
+        }
+        val cell = BaseCellSize * fitClamped
+        zoom = fitClamped
         panX = (viewportWidth - canvasWidth * cell) / 2f
         panY = (viewportHeight - canvasHeight * cell) / 2f
         return true

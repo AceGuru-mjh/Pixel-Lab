@@ -83,6 +83,31 @@ class EditorSuiteLogicTest {
     }
 
     @Test
+    fun fitToViewNeverSnapsAboveTheViewport() {
+        // A fit that lands just under a power-of-two rung used to snap UP
+        // (clampZoom's 10% tolerance) and re-crop the frame.
+        val state = CanvasState()
+        state.canvasWidth = 100
+        state.canvasHeight = 100
+        state.viewportWidth = 1250
+        state.viewportHeight = 1250
+        // fitZoom = (1250-16)/100/12 = 1.03 -> no snap; but engineered to
+        // land just above a rung: viewport 2780 -> 2.088 -> snaps to 2? No:
+        // |2.088-2| = 0.088 <= 0.2 -> rung 2 <= fit? 2 <= 2.088 YES: fits.
+        // The regression case: fitZoom 1.9 (within 10% BELOW rung 2 must NOT
+        // snap up): viewport 100*12*1.9+16 = 2296.
+        state.viewportWidth = 2296
+        state.viewportHeight = 2296
+        assertTrue(state.fitToView())
+        val cell = CanvasState.BaseCellSize * state.zoom
+        val frame = 100 * cell
+        assertTrue(
+            "frame $frame must stay within viewport 2296 (zoom ${state.zoom})",
+            frame <= 2296f,
+        )
+    }
+
+    @Test
     fun fitToViewIsNoOpWithoutViewport() {
         val state = CanvasState()
         state.canvasWidth = 32

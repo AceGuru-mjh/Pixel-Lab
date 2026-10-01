@@ -55,13 +55,13 @@ val handle = server.start(8901, websocketPort = 8902)
 | tier | 注册表 | 覆盖 | 数量 |
 |:---|:---|:---|:---|
 | 1 | `McpToolRegistry` | canvas/draw/layer/frame/palette/anim/text/template/export/project | 58 |
-| 2 | `McpToolRegistryV2` | 形状/画笔/选区/对称/文本样式/转换管线 | 36 |
+| 2 | `McpToolRegistryV2`（共享服务器 lab 实例） | 形状/画笔/选区/对称/文本样式/转换管线 | 36 |
 | 3 | `McpToolRegistryV3` | io 导入导出/生成器/精灵图集/tilemap/管线/历史 | 31 |
-| 4 | `McpToolRegistryV4` | 分析/变换/色彩科学/矢量导出 | 32 |
+| 4 | `McpToolRegistryV4` | 分析/变换/色彩科学/矢量导出（含 frame_heal 审计闭环） | 33 |
 | 5 | `McpToolRegistryV5` | Agent 视觉：区域读回/ASCII/普查/结构/对称/帧差/描述 | 11 |
 | 6 | `McpToolRegistryV6` | Agent 工效学：批量绘制/检查点/会话持久化/指纹校验 | 14 |
 
-调用经 `McpToolRouter` 层级链派发（v1→…→v6，`-32601` 仅在六层都未认领时出现）。
+调用经 `McpToolRouter` 层级链派发（v1→…→v6，`-32601` 仅在六层都未认领时出现）。全部六层共享服务器持有的同一 `PixelLab` 实例与 `PixelSessionStore`——v2 变更同样进入 `project_undo` 可见的引擎撤销历史，会话逐出时其历史一并清理。
 
 ### 内存纪律
 
@@ -100,7 +100,7 @@ class PixelDrawTool(private val lab: PixelLab) : AgentTool {
 ## 工具纪律（宿主硬约束）
 
 1. **id 风格**：宿主工具 id 为点分风格由宿主自行前缀；Pixel Lab MCP 工具名是 snake_case（`draw_pixel`），宿主注册时可加 `pixel.` 前缀。
-2. **输出截断**：长操作（GIF 编码）宿主侧已有 `ToolStreamEvent.Progress` 流式进度与 `ToolRunPolicy` 长超时条目，Pixel Lab 的导出工具返回 `byte_count` + 文件路径摘要即可。
+2. **输出截断**：长操作（GIF 编码）宿主侧已有 `ToolStreamEvent.Progress` 流式进度与 `ToolRunPolicy` 长超时条目，Pixel Lab 的导出工具返回 `byte_count` + 摘要，载荷 ≤ 2MB 时同时内联 `data_b64`（超出提示改用 `session_save` / 缩小 scale）；落盘走宿主侧（Pixel Lab 会话内不写导出文件）。
 3. **文件互通**：导出文件写入宿主 workspace（`filesDir/linux/workspaces/default`）后与宿主 `read_file`/`download_file` 工具链互通。
 
 ## ViroPet 协同

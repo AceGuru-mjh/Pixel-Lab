@@ -22,8 +22,8 @@ class HealReport(
     /** True when every requested fix was applied and no requested fix was a no-op. */
     val allApplied: Boolean,
 ) {
-    /** `before.score - after.score`; positive when the heal helped. */
-    val scoreDelta: Int get() = before.score - after.score
+    /** `after.score - before.score`; positive when the heal raised quality (the score is 0-100, higher is better). */
+    val scoreDelta: Int get() = after.score - before.score
 
     /** Total number of defect sites repaired across all rules. */
     val totalFixed: Int get() = fixed.values.sum()
@@ -76,6 +76,10 @@ class HealReport(
  * val report = CraftHealer.heal(frame)
  * if (report.scoreDelta > 0) use(report.frame) else keep(frame)
  * ```
+ *
+ * The score is a 0-100 quality grade (higher = better, see
+ * [PixelAuditReport.score]), so a successful heal has a *positive*
+ * [HealReport.scoreDelta].
  */
 object CraftHealer {
 

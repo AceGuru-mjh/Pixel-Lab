@@ -1,10 +1,10 @@
-# MCP Tools — 182 个工具参考（tier 1–6 全量）
+# MCP Tools — 183 个工具参考（tier 1–6 全量）
 
 传输：JSON-RPC 2.0，`GET /sse`（事件流）+ `POST /messages`（请求/响应并镜像至 SSE）；可选 RFC 6455 WebSocket 通道（`start(port, websocketPort)`）。请求体支持 Content-Length 与 chunked。
 会话：`session_id` 参数（缺省自动创建，LRU 32 上限；生成类工具无 `session_id` 时自动新建；id ≤ 128 字符）。
 错误形状：参数错误 `-32602` / 工具崩溃 `isError` / 未知工具 `-32601`。
 图像纪律：导出工具返回 `byte_count` 与摘要，≤ 2MB 时同时内联 `data_b64`（超出则提示改用 session_save / 缩小 scale）；V3 的 io_export_* 同样遵循。
-派发：`McpToolRouter` 层级链（tier 1 canvas/draw/layer/frame/palette/anim/text/template/export/project 58 个 → tier 2 形状/画笔/选区/对称/样式/文字 36 个 → tier 3 io/生成/图集/tilemap/管线 31 个 → tier 4 分析/变换/色彩/矢量 32 个 → tier 5 视觉 11 个 → tier 6 工效学 14 个），`tools/list` 每条带 `tier` 字段。
+派发：`McpToolRouter` 层级链（tier 1 canvas/draw/layer/frame/palette/anim/text/template/export/project 58 个 → tier 2 形状/画笔/选区/对称/样式/文字 36 个 → tier 3 io/生成/图集/tilemap/管线 31 个 → tier 4 分析/变换/色彩/矢量 33 个 → tier 5 视觉 11 个 → tier 6 工效学 14 个），`tools/list` 每条带 `tier` 字段。
 
 ## 画布尺寸纪律
 
@@ -47,9 +47,9 @@
 
 `anim_set_fps`(fps) · `anim_tag`(name,start,end) · `anim_breathe`(amplitude?) · `anim_preview_count`()
 
-## text_* / template_*（4）
+## text_* / template_*（3 + 1 借驻）
 
-`text_generate`(text, color, font?="5x7", scale?≤16, spacing?≤64) → 尺寸+非零像素数 · `draw_text`(session_id, text, x?, y?, color?, font?, scale?≤16, spacing?≤64, outline_color?, glow_color?, shadow_color?, vertical?) → 渲染后**盖印到会话活动 cel**（非透明文字像素覆盖，越界裁剪并返回 placed/clipped）——补齐 text_generate 只报尺寸不落笔的断链 · `template_list`（6 模板）· `template_apply`(template_id)
+`text_generate`(text, color, font?="5x7", scale?≤16, spacing?≤64) → 尺寸+非零像素数 · `draw_text`（**tier-2 注册**，语义见 V2 节）(session_id, text, x?, y?, color?, font?, scale?≤16, spacing?≤64, outline_color?, glow_color?, shadow_color?, vertical?) → 渲染后**盖印到会话活动 cel**（非透明文字像素覆盖，越界裁剪并返回 placed/clipped）——补齐 text_generate 只报尺寸不落笔的断链 · `template_list`（6 模板）· `template_apply`(template_id)
 
 ## export_*（5）
 
@@ -67,6 +67,42 @@
 ```
 
 响应：`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"ok\":true,...}"}]}}`
+
+## V2（36 个）— 形状/画笔/选区/变换/混合/对称/效果/扩展调色板/样式文字/模板 2/项目序列化
+
+> 补遗：此前该参考声称 tier 1–6 全量却漏掉了整个 V2 节；本节补齐。V2 所有变更工具与 V1 共享同一引擎（同一条 undo 历史），`session_id` 语义与其他 tier 一致。
+
+### v2-shape（6）
+
+`shape_line`(session_id, x0, y0, x1, y1, color, thickness?1..16) → 粗 Bresenham 线 · `shape_rect`(session_id, x, y, width, height, color, filled?) → 矩形（描边/填充） · `shape_ellipse`(session_id, cx, cy, rx, ry, color, filled?) → 椭圆 · `shape_polygon`(session_id, points[], color, filled?) → 闭合多边形（顶点表，扫描线填充） · `shape_star`(session_id, cx, cy, tips, r_outer, r_inner, color, filled?) → 星形 · `shape_bezier`(session_id, points[3|4], color, steps?) → 二次/三次贝塞尔
+
+### v2-brush（1）
+
+`brush_draw`(session_id, points[], color, size?1..8, shape?square/round, noise?, symmetry?) → 带对称与像素完美细化的笔触
+
+### v2-selection（6）
+
+`selection_extract`(session_id, x, y, w, h) → 提取区域为独立像素数组 · `selection_move`(session_id, x, y, w, h, dx, dy) → 平移所选像素（洞补透明） · `selection_flip_h` / `selection_flip_v`(同参数) → 区域镜像 · `selection_rotate`(session_id, x, y, size, quarter?) → 方形区域 90° 旋转 · `selection_magic`(session_id, x, y, tolerance?) → 魔棒（泛洪包围盒）
+
+### v2-transform（7）
+
+`transform_rotate`(session_id, quarter) → cel 90° 倍数旋转（画布随之） · `transform_scale`(session_id, factor) → 整数倍最近邻缩放 · `transform_grow`(session_id, color, steps?) → 不透明域膨胀 · `transform_shrink`(session_id, steps?) → 边界腐蚀 · `transform_crop`(session_id, x, y, w, h) → 裁剪 cel+画布 · `transform_pad`(session_id, l, t, r, b) → 透明衬边
+
+### v2-blend / symmetry / effect（3）
+
+`blend_apply`(session_id, mode) → 把当前层按混合模式烘焙到其下层合成之上 · `symmetry_reflect_preview`(points[], symmetry) → 只读对称反射预览 · `effect_apply`(session_id, name, 参数…) + `effect_list` → 程序化动画效果（名称+定位参数）
+
+### v2-palette（6）
+
+`palette_library_list` → 扩展调色板库（21 套，含 hex） · `palette_harmony`(base, scheme?complementary/triadic/...) → 和谐色板 · `palette_gradient`(from, to, steps) → CIELAB 感知渐变 · `palette_export_jasc` / `palette_export_gpl` / `palette_export_hex` → 会话或库调色板导出为 JASC-PAL / GIMP .gpl / 十六进制表
+
+### v2-text（2 + 1）
+
+`draw_text`(session_id, text, x?, y?, color?, font?5x7/8x8, scale?≤16, spacing?≤64, outline_color?, glow_color?, shadow_color?, vertical?) → 样式文字盖印到活动 cel（placed/clipped） · `text_style_render`(text, 样式参数) → 只渲染不落笔（返回尺寸+亮像素）
+
+### v2-template / project / export（5）
+
+`template_v2_list` → V2 模板目录（mushroom/slime/ghost/…） · `template_v2_apply`(template_id, palette_id?, session_id?) → 实例化到会话（**每次铸造全新 project id**，不与他会话共享 undo） · `project_save`(session_id) → 序列化 v2 项目 JSON（>4k 字符只回摘要） · `project_load`(json, session_id?) → 重建会话（同样铸造全新 id） · `export_aseprite_json`(session_id) → Aseprite spritesheet 元数据 JSON
 
 ## V3 — 导入/生成/瓦片地图/图集/历史/流水线（31 个新工具，v3 传输含 WebSocket）
 
@@ -105,11 +141,11 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 `pipeline_run`(recipe_json) → 步骤顺序执行（scale/quantize/dither/palette-map/outline/trim/posterize/bg-remove） · `pipeline_recipe_validate`(recipe_json) → 步骤摘要（纯校验）
 
-## V4（32 个）— 第 4 轮能力（分析 / 变换 / 世界生成 / 色彩科学 / 矢量）
+## V4（33 个）— 第 4 轮能力（分析 / 变换 / 世界生成 / 色彩科学 / 矢量）
 
-### v4-analysis（10）
+### v4-analysis（11）
 
-`frame_histogram`(session_id) → R/G/B/A/Rec.709 luma 通道统计（均值/方差/熵/分位数/透明比） · `frame_otsu`(session_id, levels, binarize) → Otsu 单级/多级（DP）阈值，可选二值化 · `frame_equalize`(session_id) → 保色相 luma 直方图均衡 · `frame_autolevels`(session_id, low_pct, high_pct) → 百分位对比度拉伸 · `frame_convolve`(session_id, kernel[13 种], edge[clamp/wrap/transparent], alpha[premultiplied/straight/alpha_only]) → 卷积 · `frame_morphology`(session_id, op[8 种], element[square3/cross3/square5]) → 膨胀/腐蚀/开闭/去孤点/填洞/描边/清理 · `frame_components`(session_id, connectivity, mode) → 连通域清单（面积/包围盒/周长/洞/边界） · `frame_metrics`(session_id, frame_index_b, frame_index_a, tolerance) → MAE/PSNR/差异比/差异框 · `frame_audit`(session_id, tiny_cluster_area, similar_tolerance) → 像素工艺审计（尘点/断角/棋盘/洞/微簇/锯齿）+ 0-100 评分 + 建议 · `frame_remove_small`(session_id, min_area, connectivity) → 按面积去斑
+`frame_histogram`(session_id) → R/G/B/A/Rec.709 luma 通道统计（均值/方差/熵/分位数/透明比） · `frame_otsu`(session_id, levels, binarize) → Otsu 单级/多级（DP）阈值，可选二值化 · `frame_equalize`(session_id) → 保色相 luma 直方图均衡 · `frame_autolevels`(session_id, low_pct, high_pct) → 百分位对比度拉伸 · `frame_convolve`(session_id, kernel[13 种], edge[clamp/wrap/transparent], alpha[premultiplied/straight/alpha_only]) → 卷积 · `frame_morphology`(session_id, op[8 种], element[square3/cross3/square5]) → 膨胀/腐蚀/开闭/去孤点/填洞/描边/清理 · `frame_components`(session_id, connectivity, mode) → 连通域清单（面积/包围盒/周长/洞/边界） · `frame_metrics`(session_id, frame_index_b, frame_index_a, tolerance) → MAE/PSNR/差异比/差异框 · `frame_audit`(session_id, tiny_cluster_area, similar_tolerance) → 像素工艺审计（尘点/断角/棋盘/洞/微簇/锯齿）+ 0-100 评分 + 建议 · `frame_heal`(session_id, tiny_cluster_area?, similar_tolerance?, fix_*?, require_no_regression?) → 审计驱动修复：清尘/去微簇/填洞/桥接断角与棋盘后重审计并落盘（净负分自动回滚），返回 score_before/after/delta、fixed 各规则计数与 remaining_findings —— audit→heal 一调用闭环 · `frame_remove_small`(session_id, min_area, connectivity) → 按面积去斑
 
 ### v4-transform（6）
 
@@ -127,11 +163,11 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 `frame_contours`(session_id, color, tolerance, simplify) → 走廊格轮廓环（洞标记 + path 字符串） · `export_svg`(session_id, mode[runs/outline], title) → 静态 SVG（每色一 path，b64 返回） · `export_svg_animated`(session_id, frame_duration_ms, loop, title) → SMIL 动画 SVG（每帧一个 g + 离散 opacity 驱动）
 
-**累计：157 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 32）。
+**累计：158 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 33）。
 
 ## V5（11 个）— Agent 视觉（第 5 轮：让 Agent 看见画布）
 
-修复"盲画"问题：此前 157 个工具全是写操作，Agent 画完无法核对。V5 全部只读 —— 不产生撤销记录、不改动会话。
+修复"盲画"问题：此前 158 个工具全是写操作，Agent 画完无法核对。V5 全部只读 —— 不产生撤销记录、不改动会话。
 
 ### v5-read（4）
 
@@ -145,7 +181,7 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 `canvas_structure`(session_id, connectivity[four/eight], max_blobs) → 连通区域解读（面积/外接框/主色/洞/贴边/填充比/形状判词"实心块/环形/细轮廓"）+ 宏观占用指纹格 · `canvas_symmetry`(session_id, tolerance 0..255) → 水平/垂直/180°/对角对称探针（逐轴 holds + 失配对数） · `canvas_diff`(session_id, mode[last_op/frames/sessions], frame_a, frame_b, other_session_id) → 差异报告（+增/-删/~改色像素数、各类包围框、色变迁移表、一句总结；last_op 对比最近一次操作前快照，引擎 peekBefore 非变异读取）
 
-**累计：168 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 32 + v5 11）。
+**累计：169 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 33 + v5 11）。
 
 ### 本轮契约修复（Agent 可理解性）
 
@@ -179,4 +215,4 @@ V3 注册表与 V1/V2 并列挂载（`McpToolRegistryV3(lab)`），新增 `trans
 
 `sketch_draw`(session_id, sketch, x?, y?, frame_index?) → 把 canvas_read(format="sketch") / canvas_legend 的文本**画回会话**：图例行 `C=#RRGGBB|#AARRGGBB`、`---` 分隔、字符格（'.' 透明）。解析后的非透明格盖印到指定帧（默认 active）的活动 cel；x/y ≥ 0，越界格裁剪并以 placed/clipped 计数返回，另附 parsed {width,height,points} 与 projectSummary。读 → 改文本 → 画回，视觉闭环落地。
 
-**累计：182 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 32 + v5 11 + v6 14）。
+**累计：183 个 MCP 工具**（v1 58 + v2 36 + v3 31 + v4 33 + v5 11 + v6 14）。

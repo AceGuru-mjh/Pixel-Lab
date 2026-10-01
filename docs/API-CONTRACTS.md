@@ -355,15 +355,20 @@ region using `surface`/`surfaceVariant`.
 ```kotlin
 package com.pixellab.mcp
 
-class PixelMcpServer(private val config: com.pixellab.core.PixelLabConfig = PixelLabConfig.default()) {
-    fun start(port: Int): PixelMcpHandle
+class PixelMcpServer(
+    private val config: com.pixellab.core.PixelLabConfig = PixelLabConfig.default(),
+    persistenceRoot: java.io.File? = null,
+) {
+    fun start(port: Int, websocketPort: Int? = null): PixelMcpHandle
     fun stop()
     val isRunning: Boolean
     val port: Int?
-    fun toolCount(): Int
+    val authToken: String?          // bearer token of the current start, null while stopped
+    fun sessionStore(): PixelSessionStore
+    fun toolCount(): Int            // 183
     fun listTools(): List<McpToolInfo>
-    data class McpToolInfo(val name: String, val description: String, val category: String)
-    data class PixelMcpHandle(val port: Int, val startedAtMs: Long)
+    data class McpToolInfo(val name: String, val description: String, val category: String, val tier: Int)
+    data class PixelMcpHandle(val port: Int, val websocketPort: Int?, val startedAtMs: Long, val authToken: String)
 }
 ```
 
@@ -377,17 +382,21 @@ stream. JSON = hand-rolled tree API in `json/Json.kt`
 `JsonElement` sealed hierarchy: `JsonObject`/`JsonArray`/`JsonString`/
 `JsonNumber`/`JsonBoolean`/`JsonNull`, plus `obj { put("k", v) }`-style
 builders and `long("k")`/`string("k")`/`int("k")`/`bool("k")`/`array("k")`
-accessors). Tool registry of 36+ tools grouped by category: `canvas_*`,
-`draw_*`, `layer_*`, `frame_*`, `palette_*`, `convert_*`, `anim_*`,
-`export_*`, `text_*`, `template_*`, `project_*`. Tools are pure functions
-from JsonObject params to JsonObject results; state lives in
-`PixelSessionStore` (in-memory map session id -> SpriteProject). Server never
-blocks: socket accept loop + tool execution on `Dispatchers.IO`/`Default`.
-GIF/PNG results return byte counts (never base64 blobs). Tool ids are plain
+accessors). Tool registry of **183 tools across six tiers**
+(`McpToolRouter` tier chain, duplicate names fail fast, `tools/list`
+carries a `tier` field per tool). Tools are pure functions from JsonObject
+params to JsonObject results; state lives in `PixelSessionStore`
+(in-memory LRU map session id -> SpriteProject, cap 32). Tool execution is
+serialized through one router mutex. Optional `persistenceRoot` wires
+`ProjectStore`/`SlotStore` for `session_save`/`session_load`. Every
+request must carry `Authorization: Bearer <token>` (token from the start
+handle). Binary exports (PNG/GIF/APNG/…) return `byte_count` plus
+`data_b64` inline when the payload is ≤ 2 MB (larger payloads report sizes
+and suggest `session_save`/smaller scale). Tool ids are plain
 dotted-free snake_case (`draw_pixel`). Handshake: JSON-RPC `initialize`
-method, `tools/list`, `tools/call`. Full tool table lives in
-`docs/MCP-TOOLS.md` (coordinator-delivered doc file; agents write tools to
-match the registry names below):
+method, `tools/list`, `tools/call`. The complete, current tool table lives
+in `docs/MCP-TOOLS.md` — treat it as the source of truth (the names below
+are only the historical tier-1 excerpt):
 
 canvas_create, canvas_info, canvas_clear, canvas_shift, canvas_flip_h,
 canvas_flip_v, canvas_rotate, canvas_outline,

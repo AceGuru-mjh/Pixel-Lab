@@ -70,7 +70,7 @@ class McpToolRouter(lab: PixelLab, persistence: McpPersistence? = null) {
 
     init {
         val v1 = McpToolRegistry(lab)
-        val v2 = McpToolRegistryV2
+        val v2 = McpToolRegistryV2(lab)
         val tier3 = McpToolRegistryV3(lab)
         val tier4 = McpToolRegistryV4(lab)
         val tier5 = McpToolRegistryV5(lab)

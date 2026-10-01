@@ -4,10 +4,14 @@ package com.pixellab.core.nativelib
  * JNI bridge to the native ditherer (Floyd-Steinberg, Atkinson, Bayer
  * matrices 2x2/4x4/8x8, checkerboard).
  *
- * Semantics match the Kotlin fallback: transparent pixels
+ * Structural semantics match the Kotlin fallback: transparent pixels
  * (`alpha < 0x80`) keep their original alpha; opaque pixels map to the
  * nearest palette color preserving their alpha; intensity is clamped to
- * `[0, 1]` with NaN treated as 0.
+ * `[0, 1]` with NaN treated as 0. Outputs are NOT byte-identical to the
+ * Kotlin path: native nearest-color selection uses squared-RGB distance
+ * (Kotlin uses CIELAB) and error accumulation truncates (Kotlin rounds
+ * half-up) — see [com.pixellab.core.convert.Ditherer] for the pinning
+ * guidance.
  */
 object NativeDitherer {
 

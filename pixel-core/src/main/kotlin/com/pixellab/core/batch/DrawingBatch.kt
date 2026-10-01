@@ -164,7 +164,7 @@ object DrawingBatch {
      * mid-batch with earlier ops already on the canvas — breaking the
      * all-or-nothing promise of dry-run validation.
      */
-    public const val MAX_SHAPE_AREA: Int = 4_194_304
+    public const val MAX_SHAPE_AREA: Int = com.pixellab.core.engine.DrawOps.MAX_SHAPE_AREA.toInt()
 
     /** Radius ceiling for batch circles, mirroring DrawOps/PixelEngine. */
     public const val MAX_CIRCLE_RADIUS: Int = 65_536
@@ -173,7 +173,7 @@ object DrawingBatch {
     public const val MAX_LINE_SPAN: Long = 262_144L
 
     /** Brush thickness range accepted for line and stroke ops. */
-    const val MAX_THICKNESS: Int = 16
+    const val MAX_THICKNESS: Int = com.pixellab.core.engine.DrawOps.MAX_THICKNESS
 
     /**
      * Validates every op against [project] without touching the engine.
@@ -251,6 +251,16 @@ object DrawingBatch {
                             index, "circle",
                             "radius ${op.radius} above the $MAX_CIRCLE_RADIUS cap",
                         )
+                    }
+                    if (op.filled) {
+                        val area = (op.radius.toLong() * 2 + 1) * (op.radius.toLong() * 2 + 1)
+                        if (area > MAX_SHAPE_AREA) {
+                            throw BatchValidationException(
+                                index, "circle",
+                                "filled circle area $area above the $MAX_SHAPE_AREA point budget " +
+                                    "(radius ${op.radius}) — draw in tiles instead",
+                            )
+                        }
                     }
                     val reach = op.radius + 1
                     spanGuard(

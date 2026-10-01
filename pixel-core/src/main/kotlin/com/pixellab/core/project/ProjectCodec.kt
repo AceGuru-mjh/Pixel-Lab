@@ -70,6 +70,18 @@ object ProjectCodec {
     /** Maximum JSON nesting depth accepted by the parser and writer. */
     const val MAX_DEPTH: Int = 64
 
+    /**
+     * Ceiling on the number of JSON values (objects, arrays, strings,
+     * numbers, literals) one document may materialize. The parser builds the
+     * whole PValue tree before validation runs; without this cap a hostile
+     * document claiming a huge canvas parses ~25x its text size into heap
+     * (one PNumber object + boxed String per pixel) BEFORE the
+     * pixels-length check rejects it. 16.7M values round-trips any project
+     * within the 16.7M-pixel frame ceiling (a full 4096^2 canvas); larger
+     * rasters belong in the binary exporters, not project JSON.
+     */
+    const val MAX_VALUES: Int = 16_777_216
+
     // ------------------------------------------------------------------
     // Public API
     // ------------------------------------------------------------------
@@ -201,6 +213,10 @@ object ProjectCodec {
         }
         val activeLayerId = intAt(rootObj, "activeLayerId", "activeLayerId")
         val activeFrameIndex = intAt(rootObj, "activeFrameIndex", "activeFrameIndex")
+        // Counters must stay ABOVE every live id: a hand-edited document
+        // with nextFrameId below max(frame ids) loaded fine and then threw
+        // "duplicate frame id" at the NEXT addFrame — at an arbitrary later
+        // edit point with a confusing message.
         val nextLayerId = intAt(rootObj, "nextLayerId", "nextLayerId")
         if (nextLayerId < 0) {
             throw invalid("nextLayerId", "must be >= 0 (was $nextLayerId)")
@@ -352,8 +368,12 @@ object ProjectCodec {
             palette = Palette(id = paletteId, name = paletteName, colors = colors, source = source),
             fps = fps,
             tags = tags,
-            nextLayerId = nextLayerId,
-            nextFrameId = nextFrameId,
+            // Repair (not reject) foreign documents whose counters sit below
+            // the live ids: clamp up to max(id)+1 so the id allocator can
+            // never collide (withFrames/withLayers repair on the write side;
+            // this is the load-side twin).
+            nextLayerId = maxOf(nextLayerId, (layers.maxOfOrNull { it.id } ?: -1) + 1),
+            nextFrameId = maxOf(nextFrameId, (frames.maxOfOrNull { it.id } ?: -1) + 1),
         )
     }
 
@@ -558,6 +578,9 @@ object ProjectCodec {
     private class JsonParser(val text: String) {
         private var pos: Int = 0
 
+        /** Values materialized so far — the node budget counter. */
+        private var valueCount: Long = 0L
+
         /** Parses the whole document; trailing content is rejected. */
         fun parse(): PValue {
             val value = parseValue(0)
@@ -582,6 +605,12 @@ object ProjectCodec {
         private fun parseValue(depth: Int): PValue {
             if (depth > MAX_DEPTH) {
                 throw IllegalArgumentException("JSON error: nesting deeper than $MAX_DEPTH levels")
+            }
+            if (++valueCount > MAX_VALUES) {
+                throw IllegalArgumentException(
+                    "JSON error: document exceeds the $MAX_VALUES-value budget " +
+                        "(${text.length} chars); refusing to materialize it",
+                )
             }
             skipWhitespace()
             if (atEnd()) throw IllegalArgumentException("JSON error: unexpected end of input")

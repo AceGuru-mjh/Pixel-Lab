@@ -8,10 +8,16 @@ import com.pixellab.core.nativelib.NativeLib
  * native bridge when [NativeLib] links, transparently falling back to
  * [KotlinDitherer] on `UnsatisfiedLinkError` or `IllegalArgumentException`.
  *
- * Both paths implement identical semantics: transparent pixels
- * (`alpha < 0x80`) keep their original value; opaque pixels map to the
- * nearest palette color (Lab distance) preserving their alpha; intensity is
- * clamped to `[0, 1]` with NaN treated as 0.
+ * The two paths agree on the structural semantics — transparent pixels
+ * (`alpha < 0x80`) keep their original value, opaque pixels map to the
+ * nearest palette color preserving their alpha, intensity is clamped to
+ * `[0, 1]` with NaN treated as 0 — but they are NOT byte-identical: the
+ * Kotlin path measures nearest colors in CIELAB distance and rounds the
+ * accumulated error half-up, while the native kernels use squared-RGB
+ * distance and truncate toward zero (and the native k-means shares only the
+ * seed integer, not the RNG stream, with the Kotlin quantizer). Which path
+ * runs depends on [NativeLib] linking, so cross-platform comparisons and
+ * golden-file tests must pin [preferNative] to one side.
  */
 object Ditherer {
 

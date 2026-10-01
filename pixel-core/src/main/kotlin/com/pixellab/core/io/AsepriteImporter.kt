@@ -592,6 +592,12 @@ object AsepriteImporter {
 
         val projectFrames = ArrayList<Frame>(aseFrames.size)
         val distinctColors = LinkedHashMap<Int, Unit>()
+        // Animation decoders retaining full-canvas snapshots per (frame x
+        // layer) must budget TOTAL pixels: a ~3 MB file declaring 65k frames
+        // on a 64x64 canvas used to allocate ~1 GB of rasters before any
+        // single-frame check noticed (GIF/PNG already accumulate; Aseprite
+        // was the only animation importer without the budget).
+        var retainedPixels = 0L
         for ((frameIndex, aseFrame) in aseFrames.withIndex()) {
             val cels = HashMap<Int, PixelFrame>()
             for (cel in aseFrame.cels) {
@@ -608,8 +614,13 @@ object AsepriteImporter {
                 val placed = placeCel(source, cel.x, cel.y, cel.opacity, width, height)
                 if (placed != null) {
                     cels[layerId] = placed
+                    retainedPixels = DecodeBudget.accumulate(
+                        "Aseprite", retainedPixels,
+                        placed.width.toLong() * placed.height,
+                    ) { AsepriteDecodeException(it) }
                     for (argb in placed.pixels) {
-                        if ((argb ushr 24) != 0) distinctColors.putIfAbsent(argb, Unit)
+                        if ((argb ushr 24) < 0x80) continue
+                        distinctColors.putIfAbsent(0xFF shl 24 or (argb and 0xFFFFFF), Unit)
                     }
                 }
             }

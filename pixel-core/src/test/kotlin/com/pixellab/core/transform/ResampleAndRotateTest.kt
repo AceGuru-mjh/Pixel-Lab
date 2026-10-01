@@ -171,4 +171,66 @@ class RotateOpsTest {
         assertEquals(10, out.width)
         assertEquals(10, out.height)
     }
+
+    // ---- weighted-alpha regression (audit: upscale faded opacity) ---------
+
+    @Test
+    fun `box upscale keeps fully opaque alpha`() {
+        // 2x upscale of an opaque frame: each output cell covers 0.5x0.5 of
+        // one source pixel (weight 0.25). The old count-division produced
+        // alpha 63; the weighted division must keep 255.
+        val frame = TestArt.solid(2, 2, TestArt.A)
+        val out = Resample.boxResample(frame, 4, 4)
+        for (i in out.pixels.indices) {
+            assertEquals("pixel $i faded", 255, out.pixels[i] ushr 24)
+        }
+        // And the color survives unchanged (un-premultiply of a uniform
+        // premultiplied source round-trips).
+        assertEquals(TestArt.A, out.pixels[0])
+    }
+
+    @Test
+    fun `box 4x upscale keeps fully opaque alpha`() {
+        val frame = TestArt.solid(1, 1, TestArt.B)
+        val out = Resample.boxResample(frame, 4, 4)
+        for (i in out.pixels.indices) {
+            assertEquals(255, out.pixels[i] ushr 24)
+        }
+    }
+
+    @Test
+    fun `box non-integer downscale keeps uniform alpha`() {
+        // 3 -> 2: cells cover 1.5 source pixels each (total weight 1.0 per
+        // cell after row/col weights; the old path divided by count=4 for
+        // the partial cells). A fully opaque uniform frame must stay opaque.
+        val frame = TestArt.solid(3, 3, TestArt.A)
+        val out = Resample.boxResample(frame, 2, 2)
+        for (i in out.pixels.indices) {
+            assertEquals("pixel $i faded", 255, out.pixels[i] ushr 24)
+        }
+    }
+
+    @Test
+    fun `extreme box downscale averages every source pixel`() {
+        // 8x1 strip of alternating opacity 255/0 -> 1x1 must average ALL 8
+        // (the old 256-sample valve was fine here, but the valve family
+        // broke 1024-wide cases; assert the principle on a small strip).
+        val pixels = IntArray(8) { if (it % 2 == 0) TestArt.W else 0 }
+        val frame = com.pixellab.core.model.PixelFrame.of(8, 1, pixels)
+        val out = Resample.boxResample(frame, 1, 1)
+        assertEquals(128, out[0, 0] ushr 24)
+        assertEquals(255, out[0, 0] ushr 16 and 0xFF)
+    }
+
+    @Test
+    fun `box resample rejects negative-array-size targets`() {
+        // 65536 x 65536 wraps Int in the old `IntArray(w * h)`.
+        val frame = TestArt.solid(2, 2, TestArt.A)
+        try {
+            Resample.boxResample(frame, 65536, 65536)
+            org.junit.Assert.fail("expected rejection of the 4G-pixel target")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message!!.contains("pixel budget"))
+        }
+    }
 }

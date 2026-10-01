@@ -15,9 +15,13 @@ namespace pixel_lab {
 // Pins a jintArray and exposes it as a mutable int32_t view. Copies back on
 // destruction (mode 0) unless constructed with copyBack=false, which releases
 // with JNI_ABORT — the correct mode for input-only buffers whose contents
-// were only ever *read*. Writing through such a view is legal scratch, but
-// the caller-side array never observes it: an aliasing hazard where an
-// immutable frame's pixel buffer would silently mutate otherwise.
+// were only ever *read*.
+//
+// IMPORTANT: GetIntArrayElements may legally return a DIRECT pointer
+// (isCopy == false) into the caller's array. Writing through such a view
+// mutates the caller-side array IMMEDIATELY — release mode is irrelevant.
+// Input-pinned views must therefore never be used as output scratch;
+// compute into a local std::vector and SetIntArrayRegion instead.
 class ScopedIntArray {
 public:
     explicit ScopedIntArray(JNIEnv* env, jintArray array, bool copyBack = true)
@@ -92,9 +96,19 @@ private:
 
 // Extracts the pixel buffers from a jobjectArray of jintArray frames.
 // Returns false (with a pending IllegalArgumentException) on malformed input.
+// Grows the local-reference capacity first: one object ref per frame plus
+// the array refs would otherwise overflow the default local table for
+// multi-thousand-frame GIF exports (a bounded table aborts the process).
 inline bool pinFrameArrays(JNIEnv* env, jobjectArray frames, std::vector<int32_t*>& out,
                            std::vector<jintArray>& outRefs) {
     const jsize count = env->GetArrayLength(frames);
+    if (count < 0) {
+        return false;
+    }
+    if (env->EnsureLocalCapacity(count + 16) != JNI_OK) {
+        // Pending OutOfMemoryError propagates to the caller.
+        return false;
+    }
     out.resize(static_cast<size_t>(count));
     outRefs.resize(static_cast<size_t>(count));
     for (jsize i = 0; i < count; ++i) {

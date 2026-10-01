@@ -316,12 +316,28 @@ class SlotStore(private val root: File) {
         throw IOException("slot: unterminated string")
     }
 
-    /** Atomic write: staging file, then delete-target + rename. */
+    /**
+     * Atomic write: staging file, then a replace-move. Mirrors
+     * [ProjectStore.writeAtomic]: `Files.move(ATOMIC_MOVE, REPLACE_EXISTING)`
+     * with a legacy rename fallback — the previous delete-then-rename lost
+     * the slot entirely when a crash landed between the two calls (the
+     * KDoc's own atomicity promise did not survive a crash window).
+     */
     private fun writeAtomic(target: File, bytes: ByteArray) {
         target.parentFile?.mkdirs()
         val staging = File(target.parentFile, target.name + ".tmp")
         staging.writeBytes(bytes)
-        if (target.exists()) target.delete()
+        try {
+            java.nio.file.Files.move(
+                staging.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+            return
+        } catch (atomicUnsupported: java.nio.file.AtomicMoveNotSupportedException) {
+            // Fall through to the legacy rename below.
+        }
         if (!staging.renameTo(target)) {
             staging.delete()
             throw IOException("slot: could not move ${staging.name} into place")

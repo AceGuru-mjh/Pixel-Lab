@@ -28,6 +28,17 @@ import kotlin.math.sin
  *    Bresenham lines so no gaps appear at larger radii.
  */
 object GeometryShapes {
+    /**
+     * Vertex-count ceiling for polygon/star construction: the engine
+     * materializes `IntArray(count)` plus `count` Bresenham edges — an
+     * unchecked `sides = 2_000_000_000` used to attempt a 4 GB allocation
+     * before any drawing happened.
+     */
+    const val MAX_VERTEX_COUNT: Int = 4096
+
+    /** Sampling-step ceiling for Bezier/arc subdivision (DoS + memory). */
+    const val MAX_CURVE_STEPS: Int = 4096
+
 
     /** Hard cap on arc sampling steps, bounding memory for huge radii. */
     private const val MAX_ARC_STEPS = 100_000
@@ -44,6 +55,7 @@ object GeometryShapes {
      */
     fun polygon(cx: Int, cy: Int, radius: Int, sides: Int, rotationDeg: Double = 0.0): List<PixelPoint> {
         require(sides >= 3) { "polygon needs at least 3 sides (was $sides)" }
+        require(sides <= MAX_VERTEX_COUNT) { "polygon sides must be <= $MAX_VERTEX_COUNT (was $sides)" }
         require(radius >= 0) { "polygon radius must be >= 0 (was $radius)" }
         val xs = IntArray(sides)
         val ys = IntArray(sides)
@@ -74,6 +86,7 @@ object GeometryShapes {
      */
     fun star(cx: Int, cy: Int, outerRadius: Int, innerRadius: Int, points: Int = 5): List<PixelPoint> {
         require(points >= 2) { "star needs at least 2 points (was $points)" }
+        require(points <= MAX_VERTEX_COUNT) { "star points must be <= $MAX_VERTEX_COUNT (was $points)" }
         require(outerRadius >= 0) { "star outerRadius must be >= 0 (was $outerRadius)" }
         require(innerRadius >= 0) { "star innerRadius must be >= 0 (was $innerRadius)" }
         val count = points * 2
@@ -145,7 +158,7 @@ object GeometryShapes {
      * @throws IllegalArgumentException when [steps] is below 1.
      */
     fun quadraticBezier(p0: PixelPoint, p1: PixelPoint, p2: PixelPoint, steps: Int = 32): List<PixelPoint> {
-        require(steps >= 1) { "steps must be >= 1 (was $steps)" }
+        require(steps in 1..MAX_CURVE_STEPS) { "steps must be in [1, $MAX_CURVE_STEPS] (was $steps)" }
         val out = LinkedHashSet<PixelPoint>()
         for (i in 0..steps) {
             val t = i.toDouble() / steps
@@ -171,7 +184,7 @@ object GeometryShapes {
         p3: PixelPoint,
         steps: Int = 48,
     ): List<PixelPoint> {
-        require(steps >= 1) { "steps must be >= 1 (was $steps)" }
+        require(steps in 1..MAX_CURVE_STEPS) { "steps must be in [1, $MAX_CURVE_STEPS] (was $steps)" }
         val out = LinkedHashSet<PixelPoint>()
         for (i in 0..steps) {
             val t = i.toDouble() / steps
@@ -323,7 +336,9 @@ object GeometryShapes {
      * @throws IllegalArgumentException when [thickness] is below 1.
      */
     fun thickPolyline(points: List<PixelPoint>, thickness: Int): List<PixelPoint> {
-        require(thickness >= 1) { "thickness must be >= 1 (was $thickness)" }
+        require(thickness in 1..com.pixellab.core.engine.DrawOps.MAX_THICKNESS) {
+            "thickness must be in [1, ${com.pixellab.core.engine.DrawOps.MAX_THICKNESS}] (was $thickness)"
+        }
         if (points.isEmpty()) return emptyList()
         if (points.size == 1) {
             val only = points[0]

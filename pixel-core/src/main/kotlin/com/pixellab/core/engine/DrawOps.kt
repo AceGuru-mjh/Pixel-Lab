@@ -37,7 +37,7 @@ object DrawOps {
      * span first). 262144 steps covers every sane pixel-art canvas diagonal
      * while keeping the walk constant-bounded.
      */
-    private const val MAX_LINE_SPAN = 262_144
+    const val MAX_LINE_SPAN: Long = 262_144L
 
     /**
      * Circle radius ceiling. The midpoint loop iterates O(r) with an O(r)
@@ -45,6 +45,25 @@ object DrawOps {
      * seconds to OOM in the audit. 65536 already dwarfs any pixel-art canvas.
      */
     private const val MAX_CIRCLE_RADIUS = 65_536
+
+    /**
+     * Ceiling on any MATERIALIZED point set (filled shapes are O(area)):
+     * a filled circle/ellipse of this area budget is the largest shape the
+     * engine will ever build as a point list (~4M points ≈ 96 MB of
+     * PixelPoint heap — anything larger must be drawn in tiles). The batch
+     * layer enforces the same budget for rects; filled circles previously
+     * slipped past it: `radius=65536, filled=true` passed every validation
+     * and then attempted ~13.4 billion point allocations.
+     */
+    const val MAX_SHAPE_AREA: Long = 4_194_304L
+
+    /**
+     * Brush/line thickness ceiling (matches the batch layer's cap): a thick
+     * line runs `thickness` Bresenham copies through a dedup set, so an
+     * unchecked thickness is a memory/time bomb the same way an unbounded
+     * radius is.
+     */
+    const val MAX_THICKNESS: Int = 16
 
     /** Bresenham integer line from (`x0`, `y0`) to (`x1`, `y1`), all octants. */
     fun line(x0: Int, y0: Int, x1: Int, y1: Int): List<PixelPoint> {
@@ -87,7 +106,7 @@ object DrawOps {
      * @throws IllegalArgumentException if [thickness] is below 1.
      */
     fun thickLine(x0: Int, y0: Int, x1: Int, y1: Int, thickness: Int): List<PixelPoint> {
-        require(thickness >= 1) { "thickness must be >= 1 (was $thickness)" }
+        require(thickness in 1..MAX_THICKNESS) { "thickness must be in [1, $MAX_THICKNESS] (was $thickness)" }
         val deltaX = x1 - x0
         val deltaY = y1 - y0
         if (deltaX == 0 && deltaY == 0) {
@@ -161,6 +180,14 @@ object DrawOps {
     fun circle(cx: Int, cy: Int, r: Int, filled: Boolean): List<PixelPoint> {
         require(r >= 0) { "circle radius must be >= 0 (was $r)" }
         require(r <= MAX_CIRCLE_RADIUS) { "circle radius must be <= $MAX_CIRCLE_RADIUS (was $r)" }
+        if (filled) {
+            // (2r+1)^2 bounding square upper-bounds the ~pi*r^2 interior;
+            // the check must happen BEFORE spanFill materializes anything.
+            val area = (r.toLong() * 2 + 1) * (r.toLong() * 2 + 1)
+            require(area <= MAX_SHAPE_AREA) {
+                "filled circle area $area exceeds the $MAX_SHAPE_AREA point budget (r=$r); draw in tiles instead"
+            }
+        }
         val boundary = LinkedHashSet<PixelPoint>()
         var octantX = 0
         var octantY = r
@@ -192,6 +219,12 @@ object DrawOps {
     fun ellipse(x: Int, y: Int, w: Int, h: Int, filled: Boolean): List<PixelPoint> {
         require(w in 1..MAX_ELLIPSE_EXTENT) { "ellipse width must be in [1, $MAX_ELLIPSE_EXTENT] (was $w)" }
         require(h in 1..MAX_ELLIPSE_EXTENT) { "ellipse height must be in [1, $MAX_ELLIPSE_EXTENT] (was $h)" }
+        if (filled) {
+            val area = w.toLong() * h.toLong()
+            require(area <= MAX_SHAPE_AREA) {
+                "filled ellipse area $area exceeds the $MAX_SHAPE_AREA point budget (${w}x${h}); draw in tiles instead"
+            }
+        }
         if (w == 1) {
             val out = ArrayList<PixelPoint>(h)
             for (row in y until y + h) addClipped(out, x, row)

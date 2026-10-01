@@ -1,6 +1,6 @@
 package com.pixellab.ui
 
-import com.pixellab.core.model.BuiltInPalettes
+import com.pixellab.core.palette.BuiltInPalettes
 import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.PixelPoint
 import com.pixellab.core.model.SpriteFactory

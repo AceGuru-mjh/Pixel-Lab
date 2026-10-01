@@ -10,7 +10,7 @@
 |:---|:---|:---|
 | `pixel-core` | 主战场 | 数据模型（PixelFrame/SpriteProject）、绘制引擎+撤销栈、动画引擎、模板/字体、量化/抖动/转换管线、PNG/GIF/APNG/精灵表/Codex 宠物包导出、C++/NDK 热路径 |
 | `pixel-ui-compose` | Compose 原子组件 | PixelCanvas（缩放/平移/笔画预览/洋葱皮/网格）、PalettePanel、TimelineStrip、LayerPanel |
-| `pixel-mcp` | MCP 服务器 | JSON-RPC 2.0 over SSE + 可选 WebSocket、四层注册表 151 工具（tier-chain 路由）、会话存储、零外部依赖（手写 HTTP/SSE/WS/JSON） |
+| `pixel-mcp` | MCP 服务器 | JSON-RPC 2.0 over SSE + 可选 WebSocket、六层注册表 182 工具（tier-chain 路由）、会话存储、零外部依赖（手写 HTTP/SSE/WS/JSON） |
 | `sample-app` | 演示 | 单 Activity 全功能画板 + Agent 指令行 + 四格式导出 |
 
 ## 快速开始
@@ -62,7 +62,7 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 - C++ 全文件 g++ `-Wall -Wextra` 语法干净 + ASan/UBSan 行为冒烟全绿（量化 3 算法确定性/抖动 7 核/洪泛/合成/LZW 回环/GIF 结构）
 - GIF/PNG/APNG 编码经 JDK ImageIO / 独立解码器像素级验证
 - MCP 服务器真实端口冒烟：initialize → tools/list → tools/call → SSE 事件流 + **WebSocket（RFC 6455 握手/掩码/分片/ping/close 1002 活体测试）**
-- **集成验证（本轮）**：26/26 协议探针（含 chunked POST / 100-Continue 大请求体 / SSE 镜像 / WS 双向 / 全四层工具可达）+ 151 工具全量冒烟（0 崩溃 0 未知工具）+ **Agent 理解力实测**（真实 LLM 仅凭 tools/list 对 8 条中文用户需求的工具选择与参数 8/8 正确执行）
+- **集成验证（本轮）**：26/26 协议探针（含 chunked POST / 100-Continue 大请求体 / SSE 镜像 / WS 双向 / 六层工具全可达）+ 151 工具全量冒烟（0 崩溃 0 未知工具）+ **Agent 理解力实测**（真实 LLM 仅凭 tools/list 对 8 条中文用户需求的工具选择与参数 8/8 正确执行）
 - 十二个增强 PR 逐一通过行为冒烟后合并（PR7-11 冒烟合计 565 断言全绿）
 - 冒烟测试修复过的真实缺陷：JDK Inflater 零容量自旋、Aseprite 现行规范 3 处布局偏差、PixelFrame.rotated90Ccw 索引笔误
 - **本轮修复**（集成验证驱动）：①96/151 工具从未接线（tier-chain 路由器补齐）②WebSocket 传输从未启动（接入 `start(port, wsPort)`）③`100-Continue` 用 `use{}` 关闭 socket（大请求体必挂）④`width*height` Int 溢出可致 native 堆越界（Long 域校验 + 8192 边长门禁）⑤画线无界坐标 DoS（跨度上限）⑥v4 参数错误错误形状（补 -32602 映射）⑦撤销历史随会话驱逐泄漏（双回调清理）⑧native 量化丢 alpha（镜像 Kotlin 契约）⑨HTTP 不支持 chunked⑩`\u+041` 非法转义被接受
@@ -99,7 +99,7 @@ Kotlin 2.0.21 · AGP 8.7.3 · compileSdk 35 · minSdk 26 · JDK 17 · Compose BO
 | PR #54 | **引擎正确性**：JNI 输入缓冲别名污染（mode-0 回写改写调用方不可变帧数组）、removeLayer 单趟构造（含内容图层必抛 IAE）、isModified 状态锚、checkpoint 双锚（分叉/驱逐诚实失败）、slot 快照版本化、载入边界清历史、撤销字节预算、并发安全 | +753 行 |
 | PR #55 | **IO 解码器加固**：统一导入预算（边 16384/帧 16.7M/总量 33.5M 像素）封死 PNG/GIF/BMP/QOI/Aseprite 全部「小文件→数 GB 分配」路径 + Long 域算术 + 链式 cel 深度上限 + V4/V5 截断守卫 | +367 行 |
 | PR #56 | **传输层加固**：Bearer token 准入（401/415/411——封死 loopback 共享与 text/plain CSRF）、8MB 增量请求体、JSON 200K 节点预算、SSE 有界队列写（慢客户端断开而非挂死服务器）、专用 accept 线程 + 128 连接上限、WS 握手期上限、RFC 9112 严格化（行内 CR 走私/trailer 上限/请求行校验） | +621 行 |
-| **合计** | | **58,900+ 行**（Kotlin 56,800+ + C++ 2,142+），**182 个 MCP 工具**，**368 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
+| **合计** | | **58,900+ 行**（Kotlin 56,800+ + C++ 2,142+），**182 个 MCP 工具**，**369 项单测**（CI 含 Gradle+NDK 全量构建、kotlinc JVM 门、C++ -Wall -Wextra 语法门、结构质量门） |
 
 任务看板：https://github.com/users/AceGuru-mjh/projects/5
 

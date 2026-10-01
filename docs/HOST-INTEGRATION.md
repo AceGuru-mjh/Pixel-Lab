@@ -41,7 +41,7 @@ val server = PixelMcpServer(
 val handle = server.start(8901)                    // handle.authToken = 本次启动的 Bearer token
 // 可选 WebSocket 通道（同一路由/会话存储）：
 val handle = server.start(8901, websocketPort = 8902)
-// 宿主用现成 mcp_connect HTTP/SSE 传输接入，174 个工具即刻可用
+// 宿主用现成 mcp_connect HTTP/SSE 传输接入，182 个工具即刻可用
 ```
 
 样例 App 已内置 MCP 服务器面板（画廊右上角入口）：固定端口 8901/8902、
@@ -54,12 +54,12 @@ val handle = server.start(8901, websocketPort = 8902)
 
 | tier | 注册表 | 覆盖 | 数量 |
 |:---|:---|:---|:---|
-| 1 | `McpToolRegistry` | canvas/draw/layer/frame/palette/anim/text/template/export/project | 34 |
-| 2 | `McpToolRegistryV2` | 形状/画笔/选区/对称/文本样式/转换管线 | 26 |
-| 3 | `McpToolRegistryV3` | io 导入导出/生成器/精灵图集/tilemap/管线/历史 | 59 |
+| 1 | `McpToolRegistry` | canvas/draw/layer/frame/palette/anim/text/template/export/project | 58 |
+| 2 | `McpToolRegistryV2` | 形状/画笔/选区/对称/文本样式/转换管线 | 36 |
+| 3 | `McpToolRegistryV3` | io 导入导出/生成器/精灵图集/tilemap/管线/历史 | 31 |
 | 4 | `McpToolRegistryV4` | 分析/变换/色彩科学/矢量导出 | 32 |
 | 5 | `McpToolRegistryV5` | Agent 视觉：区域读回/ASCII/普查/结构/对称/帧差/描述 | 11 |
-| 6 | `McpToolRegistryV6` | Agent 工效学：批量绘制/检查点/会话持久化/指纹校验 | 12 |
+| 6 | `McpToolRegistryV6` | Agent 工效学：批量绘制/检查点/会话持久化/指纹校验 | 14 |
 
 调用经 `McpToolRouter` 层级链派发（v1→…→v6，`-32601` 仅在六层都未认领时出现）。
 

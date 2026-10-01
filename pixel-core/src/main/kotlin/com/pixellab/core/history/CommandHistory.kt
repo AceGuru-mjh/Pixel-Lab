@@ -135,9 +135,10 @@ class CommandHistory(private val limit: Int = 64) {
     private var position: Int = 0
 
     /**
-     * Document state captured by the last [markSaved] (null = never saved,
-     * which is pristine by convention). Identity + content compared in
-     * [isModified].
+     * Document state captured by the last [markSaved] - or, before any
+     * save, the INITIAL document handed to the first [record] call (so a
+     * never-saved-but-edited document reads dirty instead of silently
+     * "clean"). Identity + content compared in [isModified].
      */
     private var savedState: SpriteProject? = null
 
@@ -159,7 +160,9 @@ class CommandHistory(private val limit: Int = 64) {
      * evicted save point (see [record]) keeps reporting `true`: the saved
      * state is no longer reachable through undo, which is the honest
      * answer, and the position shortcut of the past would have claimed
-     * `false` after a diverging undo-then-record pair.
+     * `false` after a diverging undo-then-record pair. Before the first
+     * [markSaved] the baseline is the initial document (see [savedState]),
+     * so an edited-but-never-saved document is dirty.
      */
     val isModified: Boolean
         get() {
@@ -192,8 +195,14 @@ class CommandHistory(private val limit: Int = 64) {
     fun record(command: EditorCommand, before: SpriteProject, after: SpriteProject) {
         if (before == after) {
             currentState = before
+            if (savedState == null) savedState = before
             return
         }
+        // First contact with a document: the pre-edit state is the save
+        // baseline, so "edited but never saved" reads as modified (the old
+        // null-convention made every unsaved document look clean, so
+        // "discard unsaved work?" prompts never fired for new documents).
+        if (currentState == null && savedState == null) savedState = before
         currentState = after
         val key = command.coalesceKey
         val top = undoStack.lastOrNull()

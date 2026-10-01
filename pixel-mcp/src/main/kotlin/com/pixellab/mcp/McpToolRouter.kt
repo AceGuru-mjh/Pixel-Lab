@@ -4,6 +4,7 @@ import com.pixellab.core.PixelLab
 import com.pixellab.mcp.json.JsonObject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 /**
  * Tier-chain composite over the six MCP tool registries.
@@ -68,6 +69,11 @@ class McpToolRouter(lab: PixelLab, persistence: McpPersistence? = null) {
     /** Serializes tool runs across tiers (engine undo state is not thread-safe). */
     private val mutex = Mutex()
 
+    /** Per-tool wall-clock budget (see [execute]). */
+    private companion object {
+        private const val TOOL_TIMEOUT_MS: Long = 60_000
+    }
+
     init {
         val v1 = McpToolRegistry(lab)
         val v2 = McpToolRegistryV2(lab)
@@ -122,7 +128,22 @@ class McpToolRouter(lab: PixelLab, persistence: McpPersistence? = null) {
     suspend fun execute(name: String, params: JsonObject, store: PixelSessionStore): JsonObject {
         val tier = tiers.firstOrNull { name in it.names }
             ?: throw McpToolException("unknown tool '$name'", JsonRpc.METHOD_NOT_FOUND)
-        return mutex.withLock { tier.execute(name, params, store) }
+        // Per-tool wall-clock budget under the global router mutex: a
+        // wedged or hostile-slow tool used to hold the ONE mutex forever —
+        // every subsequent tools/call from every client queued indefinitely
+        // while tools/list/ping still answered (the server looked alive
+        // while being fully wedged). Cancellation frees the mutex; the
+        // client gets a -32001 and can retry.
+        return mutex.withLock {
+            try {
+                withTimeout(TOOL_TIMEOUT_MS) { tier.execute(name, params, store) }
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                throw McpToolException(
+                    "tool '$name' exceeded the ${TOOL_TIMEOUT_MS}ms execution budget",
+                    JsonRpc.TOOL_TIMEOUT,
+                )
+            }
+        }
     }
 
     /** Drops tier-local per-session state (v3/v4 command histories and

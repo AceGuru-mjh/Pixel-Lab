@@ -31,6 +31,9 @@ object JsonRpc {
     /** Internal error while processing the request. */
     const val INTERNAL_ERROR: Int = -32603
 
+    /** Server-defined: the tool exceeded its wall-clock execution budget. */
+    const val TOOL_TIMEOUT: Int = -32001
+
     /** Builds a success response envelope around [result]. */
     fun response(id: JsonElement?, result: JsonObject): JsonObject =
         jsonobj {

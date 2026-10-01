@@ -278,7 +278,22 @@ class PixelMcpServer(
             respond(JsonRpc.buildError(id, JsonRpc.INVALID_PARAMS, error.message ?: "missing tool name"))
             return
         }
-        val arguments = (params.raw("arguments") as? JsonObject) ?: JsonObject(emptyMap())
+        // Malformed arguments must fail as INVALID_PARAMS, not silently
+        // degrade to "no arguments": `"arguments": []` used to run the tool
+        // and answer its own "missing parameter" error instead of the
+        // proper JSON-RPC shape (MCP smoke tests keyed on -32602).
+        val argumentsRaw = params.raw("arguments")
+        if (argumentsRaw != null && argumentsRaw !is JsonObject) {
+            respond(
+                JsonRpc.buildError(
+                    id,
+                    JsonRpc.INVALID_PARAMS,
+                    "tools/call arguments must be an object (was ${argumentsRaw.javaClass.simpleName})",
+                ),
+            )
+            return
+        }
+        val arguments = (argumentsRaw as? JsonObject) ?: JsonObject(emptyMap())
         try {
             val result = router.execute(name, arguments, store)
             val envelope = jsonobj {

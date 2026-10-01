@@ -99,6 +99,14 @@ import kotlinx.coroutines.sync.withLock
  */
 class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
 
+    private companion object {
+        /** Inline payload ceiling shared by the V4 exporters (matches v1). */
+        private const val MAX_INLINE_BYTES: Int = 2 * 1024 * 1024
+
+        /** Blob echo ceiling for frame_components (see its cap). */
+        private const val MAX_ECHOED_BLOBS: Int = 4096
+    }
+
     private val mutex = Mutex()
     private val histories = ConcurrentHashMap<String, com.pixellab.core.history.CommandHistory>()
 
@@ -217,6 +225,25 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
 
     /** The palette of the session project (tools that recolor need it). */
     private fun paletteOf(project: SpriteProject): Palette = project.palette
+
+    /**
+     * Inline-artifact discipline shared by every V4 exporter: payloads up
+     * to [MAX_INLINE_BYTES] return `data_b64`, larger ones report sizes and
+     * a note (the export SVG tools previously inlined unbounded strings —
+     * a noise canvas in runs mode produced multi-hundred-MB responses that
+     * also wedged the blocking write path).
+     */
+    private fun inlineArtifact(bytes: ByteArray): JsonObject = jsonobj {
+        if (bytes.size <= MAX_INLINE_BYTES) {
+            put("data_b64", JsonString(Base64.getEncoder().encodeToString(bytes)))
+        } else {
+            put(
+                "note",
+                "output too large for inline return (${bytes.size} bytes); " +
+                    "reduce the canvas or use io_export_* with a smaller scale",
+            )
+        }
+    }
 
     /** Hex color rendering. */
     private fun hexArgb(argb: Int): String = "#" + "%08x".format(argb)
@@ -485,11 +512,17 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
                 else -> throw IllegalArgumentException("'mode' must be opaque or same_color")
             }
             val cc = ConnectedComponentOps.label(frame, conn, colorMode)
+            // Noise-like cels can yield millions of single-pixel blobs; the
+            // echo is capped like every other analysis tool (the full census
+            // stays available through count + the component stats).
+            val echoed = cc.blobs.take(MAX_ECHOED_BLOBS)
             jsonobj {
                 put("session_id", params.string("session_id"))
                 put("count", num(cc.count.toLong()))
+                put("echoed", num(echoed.size.toLong()))
+                put("truncated", JsonBoolean(cc.count > echoed.size))
                 put("blobs", jsonarray {
-                    for (blob in cc.blobs) {
+                    for (blob in echoed) {
                         add(jsonobj {
                             put("id", num(blob.id.toLong()))
                             put("area", num(blob.area.toLong()))
@@ -723,7 +756,9 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
             required = listOf("session_id")) { params, store ->
             val session = sessionOf(params, store)
             val cel = requireActiveCel(session.project)
-            val chain = Resample.mipmapChain(cel, intParam(params, "max_levels", 9))
+            val maxLevels = intParam(params, "max_levels", 9)
+            require(maxLevels in 1..10) { "'max_levels' must be in [1, 10] (was $maxLevels)" }
+            val chain = Resample.mipmapChain(cel, maxLevels)
             jsonobj {
                 put("session_id", session.id)
                 put("levels", num(chain.size.toLong()))
@@ -734,7 +769,15 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
                             put("height", num(level.height.toLong()))
                             val png = com.pixellab.core.export.PngCodec.encode(level)
                             put("byte_count", num(png.size.toLong()))
-                            put("data_b64", JsonString(Base64.getEncoder().encodeToString(png)))
+                            // Inline budget discipline: every other exporter
+                            // funnels through a 2 MB cap; oversized levels
+                            // report sizes only (the chain itself stays
+                            // verifiable through byte_count/dimensions).
+                            if (png.size <= MAX_INLINE_BYTES) {
+                                put("data_b64", JsonString(Base64.getEncoder().encodeToString(png)))
+                            } else {
+                                put("truncated", JsonBoolean(true))
+                            }
                         })
                     }
                 })
@@ -1103,8 +1146,9 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
                 put("mode", JsonString(mode.name.lowercase()))
                 put("width", num(frame.width.toLong()))
                 put("height", num(frame.height.toLong()))
-                put("byte_count", num(svg.toByteArray().size.toLong()))
-                put("data_b64", JsonString(Base64.getEncoder().encodeToString(svg.toByteArray())))
+                val svgBytes = svg.toByteArray()
+                put("byte_count", num(svgBytes.size.toLong()))
+                for ((key, value) in inlineArtifact(svgBytes).entries) put(key, value)
             }
         }
 
@@ -1127,8 +1171,9 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
                 put("frames", num(project.frameCount.toLong()))
                 put("frame_duration_ms", num(duration.toLong()))
                 put("loop", loop)
-                put("byte_count", num(svg.toByteArray().size.toLong()))
-                put("data_b64", JsonString(Base64.getEncoder().encodeToString(svg.toByteArray())))
+                val svgBytes = svg.toByteArray()
+                put("byte_count", num(svgBytes.size.toLong()))
+                for ((key, value) in inlineArtifact(svgBytes).entries) put(key, value)
             }
         }
 

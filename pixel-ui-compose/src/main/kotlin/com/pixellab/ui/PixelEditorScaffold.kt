@@ -261,20 +261,20 @@ fun PixelEditorScaffold(
                 secondaryColor = swap
             }
             ShortcutAction.NUDGE_LEFT -> {
-                canvasState.selection = canvasState.selection?.nudgedClamped(-1, 0, liveProject.width, liveProject.height)
-                    ?: nudgeLayerFallback(-1, 0)
+                val nudged = canvasState.selection?.nudgedClamped(-1, 0, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(-1, 0)
             }
             ShortcutAction.NUDGE_RIGHT -> {
-                canvasState.selection = canvasState.selection?.nudgedClamped(1, 0, liveProject.width, liveProject.height)
-                    ?: nudgeLayerFallback(1, 0)
+                val nudged = canvasState.selection?.nudgedClamped(1, 0, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(1, 0)
             }
             ShortcutAction.NUDGE_UP -> {
-                canvasState.selection = canvasState.selection?.nudgedClamped(0, -1, liveProject.width, liveProject.height)
-                    ?: nudgeLayerFallback(0, -1)
+                val nudged = canvasState.selection?.nudgedClamped(0, -1, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(0, -1)
             }
             ShortcutAction.NUDGE_DOWN -> {
-                canvasState.selection = canvasState.selection?.nudgedClamped(0, 1, liveProject.width, liveProject.height)
-                    ?: nudgeLayerFallback(0, 1)
+                val nudged = canvasState.selection?.nudgedClamped(0, 1, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(0, 1)
             }
             ShortcutAction.SELECT_ALL -> {
                 canvasState.selection = Rect(0f, 0f, liveProject.width.toFloat(), liveProject.height.toFloat())
@@ -597,6 +597,7 @@ fun PixelEditorScaffold(
                 }
             }
         }
+    }
     }
 }
 

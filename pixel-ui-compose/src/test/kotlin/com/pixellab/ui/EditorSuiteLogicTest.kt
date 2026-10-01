@@ -1,6 +1,6 @@
 package com.pixellab.ui
 
-import com.pixellab.core.model.BuiltInPalettes
+import com.pixellab.core.palette.BuiltInPalettes
 import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.PixelPoint
 import com.pixellab.core.model.SpriteFactory
@@ -63,19 +63,23 @@ class EditorSuiteLogicTest {
 
     @Test
     fun fitToViewCentersFrameAndKeepsItInside() {
+        // A viewport that can actually hold the grid at an interactive zoom:
+        // 8x8 canvas pixels at zoom ~2.96 (cell 35.5) -> 284x284 screen px,
+        // centered inside 400x300. (The old 32x32-in-200x100 fixture could
+        // never fit: at the minimum zoom of 1 the frame alone is 384 px.)
         val state = CanvasState(initialZoom = 64f)
-        state.canvasWidth = 32
-        state.canvasHeight = 32
-        state.viewportWidth = 200
-        state.viewportHeight = 100
+        state.canvasWidth = 8
+        state.canvasHeight = 8
+        state.viewportWidth = 400
+        state.viewportHeight = 300
         assertTrue(state.fitToView())
         val cell = CanvasState.BaseCellSize * state.zoom
-        val frameW = 32 * cell
-        val frameH = 32 * cell
-        assertTrue(frameW <= 200f, "frame width $frameW must fit viewport 200")
-        assertTrue(frameH <= 100f, "frame height $frameH must fit viewport 100")
-        assertTrue(state.panX >= 0f && state.panX + frameW <= 200f)
-        assertTrue(state.panY >= 0f && state.panY + frameH <= 100f)
+        val frameW = 8 * cell
+        val frameH = 8 * cell
+        assertTrue(frameW <= 400f, "frame width $frameW must fit viewport 400")
+        assertTrue(frameH <= 300f, "frame height $frameH must fit viewport 300")
+        assertTrue(state.panX >= 0f && state.panX + frameW <= 400f)
+        assertTrue(state.panY >= 0f && state.panY + frameH <= 300f)
     }
 
     @Test
@@ -101,7 +105,7 @@ class EditorSuiteLogicTest {
         }
         assertEquals(1, notifications)
         assertEquals(1, session.undoDepth())
-        assertEquals(0xFF112233.toInt(), painted[0, 0])
+        assertEquals(0xFF112233.toInt(), painted.compositeFrame(0)[0, 0])
 
         // Same-value rewrite is a no-op: no entry, no notification.
         session.edit("Paint again") { painted }
@@ -118,10 +122,10 @@ class EditorSuiteLogicTest {
         assertTrue(session.canUndo)
         val undone = session.undo()
         assertTrue(undone != null)
-        assertEquals(0, undone!![1, 1])
+        assertEquals(0, undone!!.compositeFrame(0)[1, 1])
         assertTrue(session.canRedo)
         val redone = session.redo()
-        assertEquals(0xFF445566.toInt(), redone!![1, 1])
+        assertEquals(0xFF445566.toInt(), redone!!.compositeFrame(0)[1, 1])
     }
 
     @Test

@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.input.ImeAction
 import com.pixellab.core.model.Layer
 import com.pixellab.core.model.SpriteProject
 import kotlin.math.roundToInt
@@ -113,6 +114,7 @@ fun LayerPanel(
                 canMoveUp = index < layers.lastIndex,
                 canMoveDown = index > 0,
                 onActiveLayerChange = onActiveLayerChange,
+                onRenameLayer = onRenameLayer,
                 onMoveLayer = onMoveLayer,
                 onLayerOpacityChange = onLayerOpacityChange,
                 onLayerVisibleChange = onLayerVisibleChange,
@@ -152,6 +154,7 @@ private fun LayerRow(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onActiveLayerChange: (Int) -> Unit,
+    onRenameLayer: (Int, String) -> Unit,
     onMoveLayer: (Int, Int) -> Unit,
     onLayerOpacityChange: (Int, Float) -> Unit,
     onLayerVisibleChange: (Int, Boolean) -> Unit,

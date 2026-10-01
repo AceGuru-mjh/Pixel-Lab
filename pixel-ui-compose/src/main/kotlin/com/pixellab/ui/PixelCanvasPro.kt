@@ -697,7 +697,7 @@ fun PixelCanvasPro(
                 val perimeter = (right - left) * 2 + (bottom - top) * 2
                 val shift = (antsPhase.value * perimeter).toInt()
                 fun antCell(x: Int, y: Int, index: Int) {
-                    val color = if ((index + shift) % 2 == 0) antDark else antLight
+                    val color = if ((index + shift) % 2 == 0) antsDark else antsLight
                     drawRect(
                         color = color,
                         topLeft = Offset(origin.x + x * cell, origin.y + y * cell),

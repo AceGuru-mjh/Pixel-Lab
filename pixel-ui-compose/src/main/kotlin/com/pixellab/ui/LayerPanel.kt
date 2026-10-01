@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.input.ImeAction
 import com.pixellab.core.model.Layer
 import com.pixellab.core.model.SpriteProject
 import kotlin.math.roundToInt

@@ -598,6 +598,7 @@ fun PixelEditorScaffold(
             }
         }
     }
+    }
 }
 
 /** Mirrors the session's externally visible history state for recomposition. */

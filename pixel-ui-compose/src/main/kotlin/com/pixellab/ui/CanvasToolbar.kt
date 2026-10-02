@@ -416,15 +416,17 @@ private fun SymmetrySelector(
     val shape = RoundedCornerShape(SegmentCorner)
     Row(verticalAlignment = Alignment.CenterVertically) {
         for (symmetry in CanvasSymmetry.entries) {
-            val selected = state.symmetry == symmetry
+            // Local name must not shadow the semantics receiver's
+            // `selected` property (wrote to the val -> compile error).
+            val isSelected = state.symmetry == symmetry
             Box(
                 modifier = Modifier
                     .size(SegmentSize)
                     .background(
-                        if (selected) scheme.secondaryContainer else scheme.surfaceVariant,
+                        if (isSelected) scheme.secondaryContainer else scheme.surfaceVariant,
                         shape,
                     )
-                    .border(1.dp, if (selected) scheme.primary else scheme.outlineVariant, shape)
+                    .border(1.dp, if (isSelected) scheme.primary else scheme.outlineVariant, shape)
                     .clickable {
                         state.symmetry = symmetry
                         onSymmetryChange(symmetry)
@@ -434,13 +436,13 @@ private fun SymmetrySelector(
                     .semantics {
                         contentDescription = "Symmetry " + symmetry.name.lowercase().replace('_', ' ')
                         role = Role.Button
-                        selected = state.symmetry == symmetry
+                        selected = isSelected
                     },
                 contentAlignment = Alignment.Center,
             ) {
                 PixelGlyph(
                     glyph = symmetryGlyph(symmetry),
-                    tint = if (selected) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+                    tint = if (isSelected) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
                 )
             }
         }

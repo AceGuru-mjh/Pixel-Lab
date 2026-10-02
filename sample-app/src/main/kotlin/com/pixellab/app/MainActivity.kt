@@ -1,5 +1,6 @@
 package com.pixellab.app
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -7,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -130,7 +132,31 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                Scaffold { PixelLabSampleApp() }
+                Scaffold(
+                    topBar = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Pixel Lab",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            // The primary integration path: the full editor
+                            // suite (gallery, PR10 editor, MCP server panel)
+                            // lives behind this entry — it used to be
+                            // reachable only via adb.
+                            TextButton(onClick = {
+                                startActivity(Intent(this@MainActivity, EditorActivity::class.java))
+                            }) {
+                                Text("Full editor / MCP")
+                            }
+                        }
+                    },
+                ) { PixelLabSampleApp() }
             }
         }
     }
@@ -308,7 +334,7 @@ fun PixelLabSampleApp() {
         scope.launch {
             try {
                 val result = doExport(kind, lab, project, dir)
-                report("${kind.label} saved: ${result.file.name} (${result.byteCount} B)")
+                report("${kind.label} saved: ${result.file.absolutePath} (${result.byteCount} B)")
             } catch (error: Exception) {
                 report("Export failed: ${error.message}")
             } finally {

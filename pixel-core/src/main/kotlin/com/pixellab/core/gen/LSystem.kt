@@ -103,6 +103,9 @@ class LSystem(
         padding: Int = 4,
     ): PixelFrame {
         require(step > 0.0) { "step must be positive" }
+        // A giant step (e.g. 2e9) turns ONE stroke into a multi-billion
+        // Bresenham march — bound it like every other engine span.
+        require(step <= 8192.0) { "step must be <= 8192 (was $step)" }
         require(angleDeg > 0.0) { "angleDeg must be positive" }
         require(padding >= 0) { "padding must be ≥ 0" }
         val symbols = expand(iterations, rng)
@@ -156,6 +159,14 @@ class LSystem(
         // Rasterize into a canvas offset so all coordinates are ≥ padding.
         val w = (maxX - minX).toInt() + 1 + 2 * padding
         val h = (maxY - minY).toInt() + 1 + 2 * padding
+        require(w > 0 && h > 0) { "rendered bounds collapsed (w=$w, h=$h)" }
+        // Long-domain budget: `w * h` as Int can wrap negative (negative
+        // array size) or silently allocate gigabytes.
+        val pixels = w.toLong() * h.toLong()
+        require(pixels <= com.pixellab.core.engine.DrawOps.MAX_SHAPE_AREA) {
+            "rendered canvas ${w}x${h} ($pixels px) exceeds the " +
+                "${com.pixellab.core.engine.DrawOps.MAX_SHAPE_AREA} pixel budget — lower step/iterations"
+        }
         val ox = -minX + padding
         val oy = -minY + padding
         val out = IntArray(w * h)
@@ -172,12 +183,19 @@ class LSystem(
         return PixelFrame.of(w, h, out)
     }
 
-    /** Bresenham line into the raster buffer. */
+    /** Bresenham line into the raster buffer (span-capped like [com.pixellab.core.engine.DrawOps]). */
     private fun line(px: IntArray, w: Int, h: Int, x0: Int, y0: Int, x1: Int, y1: Int, color: Int) {
         var x = x0
         var y = y0
-        val dx = kotlin.math.abs(x1 - x0)
-        val dy = kotlin.math.abs(y1 - y0)
+        // Long-domain: Int subtraction wraps for endpoints ~2^31 apart.
+        val spanX = kotlin.math.abs(x1.toLong() - x0.toLong())
+        val spanY = kotlin.math.abs(y1.toLong() - y0.toLong())
+        require(spanX <= com.pixellab.core.engine.DrawOps.MAX_LINE_SPAN &&
+            spanY <= com.pixellab.core.engine.DrawOps.MAX_LINE_SPAN) {
+            "stroke span ($x0,$y0)→($x1,$y1) exceeds the Bresenham step limit"
+        }
+        val dx = spanX.toInt()
+        val dy = spanY.toInt()
         val sx = if (x0 < x1) 1 else -1
         val sy = if (y0 < y1) 1 else -1
         var err = dx - dy

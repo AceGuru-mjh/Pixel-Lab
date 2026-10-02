@@ -10,13 +10,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -31,6 +35,8 @@ import com.pixellab.core.model.SpriteProject
 import com.pixellab.ui.theme.PixelPanel
 import com.pixellab.ui.theme.PixelTheme
 import com.pixellab.ui.theme.PixelThemes
+import com.pixellab.ui.theme.ThemeScheme
+import com.pixellab.ui.theme.argbColor
 import kotlinx.coroutines.delay
 
 /** Below this window width (dp) the scaffold stacks into a single column. */
@@ -54,6 +60,60 @@ private const val MaxJumpIterations = 1024
 
 /** Minimum playback tick, ms (keeps the timer loop schedulable). */
 private const val MinTickMs = 16
+
+/**
+ * Bridges the suite [PixelTheme] into Material 3 so every material widget
+ * used by the panel suite (chips, sliders, text fields, icons, menus)
+ * inherits the suite palette instead of the ambient (often purple) scheme.
+ */
+@Composable
+private fun SuiteMaterialTheme(
+    theme: PixelTheme,
+    content: @Composable () -> Unit,
+) {
+    val dark = theme.scheme == ThemeScheme.DARK
+    val scheme = if (dark) darkColorScheme() else lightColorScheme()
+    // Contrast-aware ink for filled slots: an amber/teal primary needs
+    // near-black content (near-white text was ~1.5:1 against #FFB454);
+    // the outline must stay visible on dark surfaces (textDisabled
+    // measured ~2.6:1).
+    val onFilled = if (dark) {
+        androidx.compose.ui.graphics.Color(0xFF14161A.toInt())
+    } else {
+        androidx.compose.ui.graphics.Color(0xFFF2EDE4.toInt())
+    }
+    MaterialTheme(
+        colorScheme = scheme.copy(
+            primary = theme.primary,
+            onPrimary = onFilled,
+            secondary = theme.accent,
+            onSecondary = onFilled,
+            tertiary = theme.accent,
+            onTertiary = onFilled,
+            background = theme.background,
+            onBackground = theme.textPrimary,
+            surface = theme.surface,
+            onSurface = theme.textPrimary,
+            // Container slots: leaving them at the M3 baseline produced
+            // purple selected-chip/selected-row patches inside the suite
+            // (the exact ambient scheme this bridge exists to eliminate).
+            surfaceVariant = theme.elevated,
+            onSurfaceVariant = theme.textSecondary,
+            primaryContainer = theme.elevated,
+            onPrimaryContainer = theme.textPrimary,
+            secondaryContainer = theme.surface,
+            onSecondaryContainer = theme.textPrimary,
+            tertiaryContainer = theme.elevated,
+            onTertiaryContainer = theme.textPrimary,
+            errorContainer = theme.elevated,
+            onErrorContainer = theme.textPrimary,
+            error = theme.danger,
+            outline = theme.textSecondary,
+            outlineVariant = theme.textDisabled,
+        ),
+        content = content,
+    )
+}
 
 /**
  * The assembled pixel-art editor: every PR10 component wired to one
@@ -95,7 +155,9 @@ private const val MinTickMs = 16
  *
  * @param project the initial document; a *different project id* resets the
  *   session (fresh history) — live editing keeps the same instance.
- * @param theme theme override; defaults to [PixelThemes.DARK].
+ * @param theme theme override; defaults to [PixelThemes.DARK]. The suite
+ *   palette is also bridged into Material 3, so material widgets inside the
+ *   scaffold inherit it.
  * @param onProjectChange invoked after every effective edit/undo/redo with
  *   the new document.
  * @param onExport optional export hook (toolbar button).
@@ -112,6 +174,7 @@ fun PixelEditorScaffold(
     onSave: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    SuiteMaterialTheme(theme) {
     // ---- document state --------------------------------------------------
     var liveProject by remember { mutableStateOf(project) }
     var historyMeta by remember { mutableStateOf(HistorySnapshot.empty()) }
@@ -131,12 +194,20 @@ fun PixelEditorScaffold(
     }
 
     // ---- view state -------------------------------------------------------
-    val canvasState = remember { CanvasState() }
-    var primaryColor by remember { mutableStateOf(session.project.palette[0]) }
-    var secondaryColor by remember { mutableStateOf(0xFF000000.toInt()) }
-    var paletteIndex by remember { mutableStateOf(0) }
-    var cursor by remember { mutableStateOf<PixelPointerInfo?>(null) }
-    var playback by remember {
+    // All view state keys on the document id: the KDoc promises "a different
+    // project id resets the session (fresh history)" — without keys here a
+    // host swapping the document in place kept the previous project's
+    // colors, playhead and possibly out-of-bounds selection.
+    val canvasState = remember(project.id) { CanvasState() }
+    var primaryColor by remember(project.id) { mutableStateOf(session.project.palette[0]) }
+    var secondaryColor by remember(project.id) { mutableStateOf(0xFF000000.toInt()) }
+    var paletteIndex by remember(project.id) { mutableStateOf(0) }
+    // Cursor readout lives in a plain State holder handed to the leaf
+    // readers: writing a root-level remember per pointer move used to
+    // recompose the ENTIRE scaffold (tool rail, panels, timeline) at up to
+    // touch frequency.
+    val cursorState = remember { mutableStateOf<PixelPointerInfo?>(null) }
+    var playback by remember(project.id) {
         mutableStateOf(
             PlaybackState(frameIndex = project.activeFrameIndex, fps = project.fps),
         )
@@ -154,6 +225,28 @@ fun PixelEditorScaffold(
     /** Records one session edit from a UI callback (single funnel). */
     fun commit(label: String, coalesceKey: String? = null, transform: (SpriteProject) -> SpriteProject) {
         session.edit(label, coalesceKey, transform)
+    }
+
+    /**
+     * Arrow fallback when no selection exists: shifts the whole active cel
+     * one pixel (nudging the layer content instead of a marquee).
+     */
+    fun nudgeLayerFallback(dx: Int, dy: Int) {
+        if (liveProject.activeLayer.locked) return
+        commit("Nudge layer") { p ->
+            val cel = p.activeCel() ?: return@commit p
+            val w = p.width
+            val h = p.height
+            val next = IntArray(w * h)
+            for (y in 0 until h) {
+                for (x in 0 until w) {
+                    val tx = x - dx
+                    val ty = y - dy
+                    if (tx in 0 until w && ty in 0 until h) next[y * w + x] = cel[tx, ty]
+                }
+            }
+            p.withActiveCel(PixelFrame.of(w, h, next))
+        }
     }
 
     fun save() {
@@ -175,12 +268,17 @@ fun PixelEditorScaffold(
     }
 
     // ---- playback clock ---------------------------------------------------
-    LaunchedEffect(playback.playing, liveProject) {
+    // Keyed on `playing` ONLY: keying on liveProject restarted the effect
+    // on every edit (a new project instance per stroke), resetting the
+    // current frame's full delay — a stream of edits stalled playback.
+    val liveProjectNow = rememberUpdatedState(liveProject)
+    LaunchedEffect(playback.playing) {
         while (playback.playing) {
-            val index = playback.frameIndex.coerceIn(0, liveProject.frameCount - 1)
-            val tick = liveProject.effectiveFrameDuration(index).coerceAtLeast(MinTickMs)
+            val project = liveProjectNow.value
+            val index = playback.frameIndex.coerceIn(0, project.frameCount - 1)
+            val tick = project.effectiveFrameDuration(index).coerceAtLeast(MinTickMs)
             delay(tick.toLong())
-            playback = controller.advance(liveProject, playback, tick)
+            playback = controller.advance(project, playback, tick)
         }
     }
 
@@ -199,10 +297,46 @@ fun PixelEditorScaffold(
                 primaryColor = secondaryColor
                 secondaryColor = swap
             }
-            ShortcutAction.NUDGE_LEFT -> canvasState.selection = canvasState.selection?.nudged(-1f, 0f)
-            ShortcutAction.NUDGE_RIGHT -> canvasState.selection = canvasState.selection?.nudged(1f, 0f)
-            ShortcutAction.NUDGE_UP -> canvasState.selection = canvasState.selection?.nudged(0f, -1f)
-            ShortcutAction.NUDGE_DOWN -> canvasState.selection = canvasState.selection?.nudged(0f, 1f)
+            ShortcutAction.NUDGE_LEFT -> {
+                val nudged = canvasState.selection?.nudgedClamped(-1, 0, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(-1, 0)
+            }
+            ShortcutAction.NUDGE_RIGHT -> {
+                val nudged = canvasState.selection?.nudgedClamped(1, 0, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(1, 0)
+            }
+            ShortcutAction.NUDGE_UP -> {
+                val nudged = canvasState.selection?.nudgedClamped(0, -1, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(0, -1)
+            }
+            ShortcutAction.NUDGE_DOWN -> {
+                val nudged = canvasState.selection?.nudgedClamped(0, 1, liveProject.width, liveProject.height)
+                if (nudged != null) canvasState.selection = nudged else nudgeLayerFallback(0, 1)
+            }
+            ShortcutAction.SELECT_ALL -> {
+                canvasState.selection = Rect(0f, 0f, liveProject.width.toFloat(), liveProject.height.toFloat())
+            }
+            ShortcutAction.DELETE -> {
+                // Delete clears the selection region to transparent on the
+                // active cel (no-op edits are skipped by the session).
+                val sel = canvasState.selection
+                if (sel != null && !liveProject.activeLayer.locked) {
+                    val left = sel.left.toInt().coerceIn(0, liveProject.width)
+                    val top = sel.top.toInt().coerceIn(0, liveProject.height)
+                    val right = sel.right.toInt().coerceIn(0, liveProject.width)
+                    val bottom = sel.bottom.toInt().coerceIn(0, liveProject.height)
+                    val points = ArrayList<PixelPoint>()
+                    for (y in top until bottom) {
+                        for (x in left until right) points.add(PixelPoint(x, y))
+                    }
+                    if (points.isNotEmpty()) {
+                        commit("Delete selection") { p ->
+                            val cel = p.activeCel() ?: PixelFrame.blank(p.width, p.height)
+                            p.withActiveCel(cel.withPixels(points, 0))
+                        }
+                    }
+                }
+            }
             ShortcutAction.SELECT_PALETTE_SLOT -> {
                 val slot = lastShortcut?.key?.toIntOrNull()
                 if (slot != null && slot in 1..liveProject.palette.size) {
@@ -244,6 +378,13 @@ fun PixelEditorScaffold(
                             theme = theme,
                             argb = primaryColor,
                             onColorChange = { primaryColor = it },
+                        )
+                    }
+                    PixelPanel(theme = theme, title = "Secondary") {
+                        ColorSliders(
+                            theme = theme,
+                            argb = secondaryColor,
+                            onColorChange = { secondaryColor = it },
                         )
                     }
                     PixelPanel(theme = theme, title = "Palette") {
@@ -339,7 +480,7 @@ fun PixelEditorScaffold(
                 StatusBar(
                     theme = theme,
                     dims = liveProject.width to liveProject.height,
-                    cursor = cursor?.let { PixelPoint(it.x, it.y) },
+                    cursor = cursorState.value?.let { PixelPoint(it.x, it.y) },
                     zoom = canvasState.zoom,
                     activeLayer = liveProject.activeLayer.name,
                     toolName = canvasState.tool.name.lowercase(),
@@ -354,9 +495,13 @@ fun PixelEditorScaffold(
                         state = canvasState,
                         onZoomChange = { canvasState.zoom = it },
                         onReset = {
-                            canvasState.zoom = 8f
-                            canvasState.panX = 0f
-                            canvasState.panY = 0f
+                            // Fit the whole canvas to the viewport (falls back
+                            // to the classic reset before the first layout).
+                            if (!canvasState.fitToView()) {
+                                canvasState.zoom = 8f
+                                canvasState.panX = 0f
+                                canvasState.panY = 0f
+                            }
                         },
                     )
                     TextButton(onClick = { historyOpen = !historyOpen }) {
@@ -410,9 +555,42 @@ fun PixelEditorScaffold(
                         paletteIndex = liveProject.palette.findClosest(primaryColor)
                     },
                     onSelectionChange = { canvasState.selection = it },
-                    onCursorMove = { cursor = it },
+                    onMoveSelection = { original, dx, dy ->
+                        // Real content move: cut the selection region to
+                        // transparent, re-paste the opaque pixels translated
+                        // by (dx, dy). Clipped parts are dropped (same rule
+                        // as every other canvas write).
+                        if (!liveProject.activeLayer.locked) {
+                            commit("Move selection") { p ->
+                                val cel = p.activeCel() ?: PixelFrame.blank(p.width, p.height)
+                                val base = cel.pixels
+                                val next = base.copyOf()
+                                val w = p.width
+                                val h = p.height
+                                val l = original.left.toInt().coerceIn(0, w)
+                                val t = original.top.toInt().coerceIn(0, h)
+                                val r = original.right.toInt().coerceIn(0, w)
+                                val b = original.bottom.toInt().coerceIn(0, h)
+                                for (y in t until b) {
+                                    for (x in l until r) next[y * w + x] = 0
+                                }
+                                for (y in t until b) {
+                                    for (x in l until r) {
+                                        val color = base[y * w + x]
+                                        if (color == 0) continue
+                                        val tx = x + dx
+                                        val ty = y + dy
+                                        if (tx in 0 until w && ty in 0 until h) next[ty * w + tx] = color
+                                    }
+                                }
+                                p.withActiveCel(PixelFrame.of(w, h, next))
+                            }
+                        }
+                    },
+                    onCursorMove = { cursorState.value = it },
                     strokeColor = primaryColor,
                     playing = playback.playing,
+                    onionAlpha = playback.onionAlpha / 255f,
                 )
             }
             val preview: @Composable () -> Unit = {
@@ -458,6 +636,7 @@ fun PixelEditorScaffold(
             }
         }
     }
+    }
 }
 
 /** Mirrors the session's externally visible history state for recomposition. */
@@ -498,6 +677,19 @@ private fun jumpHistoryTo(session: EditorSession, depth: Int) {
 /** Shifts a half-open selection rect by whole pixels. */
 private fun Rect.nudged(dx: Float, dy: Float): Rect = Rect(left + dx, top + dy, right + dx, bottom + dy)
 
+/**
+ * Nudges the selection with edge clamping: the rect is shifted and then
+ * pulled back inside the `width x height` grid so the whole marquee stays
+ * visible. A selection larger than the grid pins to the grid origin.
+ */
+private fun Rect.nudgedClamped(dx: Int, dy: Int, width: Int, height: Int): Rect {
+    val w = right - left
+    val h = bottom - top
+    val left2 = (left + dx).coerceIn(0f, (width - w).coerceAtLeast(0f).toFloat())
+    val top2 = (top + dy).coerceIn(0f, (height - h).coerceAtLeast(0f).toFloat())
+    return Rect(left2, top2, left2 + w, top2 + h)
+}
+
 // ---- pure stroke geometry ----------------------------------------------------
 
 /**
@@ -511,7 +703,7 @@ private fun Rect.nudged(dx: Float, dy: Float): Rect = Rect(left + dx, top + dy, 
  * `width x height` grid pass through untouched — the canvas write path
  * clips them.
  */
-private fun mirrorStroke(
+internal fun mirrorStroke(
     points: List<PixelPoint>,
     width: Int,
     height: Int,

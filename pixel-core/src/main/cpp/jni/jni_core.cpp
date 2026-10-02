@@ -110,9 +110,10 @@ Java_com_pixellab_core_nativelib_NativeDitherer_nativeDither(
         pixel_lab::throwIAE(env, "dither argument shape mismatch");
         return;
     }
-    // Inputs are read-only: the dithered result is written into the pinned
-    // buffer as scratch and then copied out; releasing with copy-back would
-    // clobber the caller's immutable input array.
+    // Inputs are read-only: on a direct-pin runtime (isCopy == false)
+    // GetIntArrayElements returns the CALLER's array memory, so writing
+    // through the view would mutate the immutable input frame before any
+    // release mode could matter. Compute into local scratch and copy out.
     pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
     pixel_lab::ScopedIntArray pal(env, palette, /*copyBack=*/false);
     if (!in.valid() || !pal.valid()) {
@@ -120,12 +121,13 @@ Java_com_pixellab_core_nativelib_NativeDitherer_nativeDither(
     }
     const auto kernel = static_cast<pixel_lab::DitherKernel>(
         algorithmId < 0 ? 0 : (algorithmId > 6 ? 6 : algorithmId));
+    std::vector<uint32_t> scratch(static_cast<size_t>(width) * height);
     pixel_lab::applyDither(reinterpret_cast<const uint32_t*>(in.get()), width, height,
                            reinterpret_cast<const uint32_t*>(pal.get()),
                            static_cast<size_t>(paletteCount), kernel, intensity,
-                           reinterpret_cast<uint32_t*>(in.get()));
-    // The in-place result in the pinned input buffer is copied to the output.
-    env->SetIntArrayRegion(outPixels, 0, env->GetArrayLength(outPixels), in.get());
+                           scratch.data());
+    env->SetIntArrayRegion(outPixels, 0, env->GetArrayLength(outPixels),
+                           reinterpret_cast<const jint*>(scratch.data()));
 }
 
 // ---- NativePixelOps ----------------------------------------------------------
@@ -145,17 +147,21 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeSetPixelsBatch(
         pixel_lab::throwIAE(env, "batch write argument shape mismatch");
         return -1;
     }
-    // Read-only inputs (see the dither note): the batch result goes to out.
+    // Read-only inputs: the result goes to a local scratch buffer (a
+    // direct-pin input view is the caller's own memory — see the dither
+    // note) and is copied to out.
     pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
     pixel_lab::ScopedIntArray pts(env, points, /*copyBack=*/false);
     if (!in.valid() || !pts.valid()) {
         return -1;
     }
+    std::vector<uint32_t> scratch(static_cast<size_t>(width) * height);
     const int64_t written = pixel_lab::setPixelsBatch(
         reinterpret_cast<const uint32_t*>(in.get()), width, height, pts.get(),
         static_cast<size_t>(pointCount), static_cast<uint32_t>(argb),
-        reinterpret_cast<uint32_t*>(in.get()));
-    env->SetIntArrayRegion(out, 0, env->GetArrayLength(out), in.get());
+        scratch.data());
+    env->SetIntArrayRegion(out, 0, env->GetArrayLength(out),
+                           reinterpret_cast<const jint*>(scratch.data()));
     return static_cast<jint>(written);
 }
 
@@ -173,17 +179,19 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeFloodFill(
         pixel_lab::throwIAE(env, "flood fill argument shape mismatch");
         return -1;
     }
-    // Read-only input: the filled result is written to scratch and copied
-    // out; copy-back would mutate the immutable frame the caller passed.
+    // Read-only input: the filled result goes to local scratch (direct-pin
+    // views alias the caller's immutable array) and is copied to out.
     pixel_lab::ScopedIntArray in(env, pixels, /*copyBack=*/false);
     if (!in.valid()) {
         return -1;
     }
+    std::vector<uint32_t> scratch(static_cast<size_t>(width) * height);
     const int64_t changed = pixel_lab::floodFill(
         reinterpret_cast<const uint32_t*>(in.get()), width, height, x, y,
         static_cast<uint32_t>(replacement), tolerance,
-        reinterpret_cast<uint32_t*>(in.get()));
-    env->SetIntArrayRegion(out, 0, env->GetArrayLength(out), in.get());
+        scratch.data());
+    env->SetIntArrayRegion(out, 0, env->GetArrayLength(out),
+                           reinterpret_cast<const jint*>(scratch.data()));
     return static_cast<jint>(changed);
 }
 
@@ -223,10 +231,22 @@ Java_com_pixellab_core_nativelib_NativePixelOps_nativeCompositeLayers(
     std::vector<int> layerW(frameCount), layerH(frameCount);
     std::vector<float> layerOp(frameCount);
     for (jsize i = 0; i < frameCount; ++i) {
-        layerPtrs[i] = reinterpret_cast<const uint32_t*>(buffers[i]);
         layerW[i] = w.get()[i];
         layerH[i] = h.get()[i];
         layerOp[i] = op.get()[i];
+        layerPtrs[i] = reinterpret_cast<const uint32_t*>(buffers[i]);
+        // Validate the PINNED length against the claimed geometry BEFORE
+        // compositing: layerSizes was never consulted, so a short layer
+        // array (e.g. IntArray(5) with width=64) passed every earlier
+        // check and compositeLayers read out of bounds.
+        const jlong expected = static_cast<jlong>(layerW[i]) * layerH[i];
+        if (layerW[i] <= 0 || layerH[i] <= 0 ||
+            env->GetArrayLength(refs[i]) != static_cast<jsize>(expected)) {
+            pixel_lab::throwIAE(env, "composite layer " + std::to_string(i) +
+                                      " buffer length does not match its claimed geometry");
+            pixel_lab::releaseFrameArrays(env, buffers, refs, JNI_ABORT);
+            return -1;
+        }
     }
     const size_t pixelCount = static_cast<size_t>(layerW[0]) * layerH[0];
     if (env->GetArrayLength(out) != static_cast<jsize>(pixelCount)) {
@@ -281,8 +301,17 @@ Java_com_pixellab_core_nativelib_NativeGifEncoder_nativeEncodeGif(
     std::vector<int> delayList(frameCount);
     for (jsize i = 0; i < frameCount; ++i) {
         framePtrs[i] = reinterpret_cast<const uint32_t*>(buffers[i]);
-        frameLen[i] = static_cast<size_t>(sizes.get()[i]);
         delayList[i] = delays.get()[i];
+        // Use the ACTUAL pinned length, never the caller's claim: a short
+        // frame array with an inflated frameSizes entry read OOB in
+        // encodeGif. GIF frames are full-canvas by construction.
+        const jlong actual = env->GetArrayLength(refs[i]);
+        if (actual != static_cast<jlong>(width) * height) {
+            pixel_lab::throwIAE(env, "gif frame length mismatch");
+            pixel_lab::releaseFrameArrays(env, buffers, refs, JNI_ABORT);
+            return nullptr;
+        }
+        frameLen[i] = static_cast<size_t>(actual);
     }
     std::vector<uint8_t> gif;
     const bool ok = pixel_lab::encodeGif(width, height, framePtrs, frameLen, delayList,

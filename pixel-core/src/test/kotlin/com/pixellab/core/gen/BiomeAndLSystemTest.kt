@@ -152,4 +152,30 @@ class LSystemTest {
             throw AssertionError("expected rejection")
         } catch (expected: IllegalArgumentException) { }
     }
+
+    // ---- render budget guards -----------------------------------------------
+
+    @Test
+    fun `render rejects a giant step before marching billions of pixels`() {
+        val lsystem = com.pixellab.core.gen.LSystem.ofDeterministic("F", mapOf('F' to "F+F"))
+        try {
+            lsystem.render(step = 2.0e9)
+            org.junit.Assert.fail("expected the step ceiling to reject 2e9")
+        } catch (expected: IllegalArgumentException) {
+            org.junit.Assert.assertTrue(expected.message!!.contains("step"))
+        }
+    }
+
+    @Test
+    fun `render rejects a canvas beyond the pixel budget`() {
+        // Two 8192-px strokes at an angle span a ~28M-pixel bounding box —
+        // over the 4M budget — and must be rejected BEFORE the IntArray.
+        val lsystem = com.pixellab.core.gen.LSystem.ofDeterministic("F+F", emptyMap())
+        try {
+            lsystem.render(step = 8192.0)
+            org.junit.Assert.fail("expected the pixel budget to reject the giant canvas")
+        } catch (expected: IllegalArgumentException) {
+            org.junit.Assert.assertTrue(expected.message!!.contains("budget"))
+        }
+    }
 }

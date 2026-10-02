@@ -109,6 +109,13 @@ fun EditorScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // The system back key must respect the unsaved-changes guard: without
+    // this handler, back finished the activity directly and silently
+    // bypassed the confirmation the in-app Leave button shows.
+    androidx.activity.compose.BackHandler {
+        if (dirty) confirmLeave = true else onClose()
+    }
+
     // Disk IO stays off the main thread; the screen shows a progress
     // indicator until the document arrives.
     LaunchedEffect(projectId) {

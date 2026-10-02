@@ -55,7 +55,7 @@ class ClosedLoopToolsTest {
     private val v1 = McpToolRegistry(lab)
     private val v3 = McpToolRegistryV3(lab)
     private val v5 = McpToolRegistryV5(lab)
-    private val v2 = McpToolRegistryV2
+    private val v2 = McpToolRegistryV2(lab)
     private val v6 = McpToolRegistryV6(lab)
 
     private fun run(vararg pairs: Pair<String, Any>): JsonObject = jsonobj {

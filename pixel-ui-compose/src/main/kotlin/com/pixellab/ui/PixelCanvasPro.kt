@@ -6,7 +6,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,6 +29,9 @@ import androidx.compose.ui.unit.IntSize
 import com.pixellab.core.model.PixelFrame
 import com.pixellab.core.model.PixelPoint
 import com.pixellab.core.model.SpriteProject
+import com.pixellab.ui.theme.LocalPixelTheme
+import com.pixellab.ui.theme.PixelTheme
+import com.pixellab.ui.theme.argbColor
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.cos
@@ -72,6 +74,9 @@ private const val SymmetryAxisAlpha = 0.6f
 
 /** Draw alpha of the cursor crosshair lines. */
 private const val CrosshairAlpha = 0.35f
+
+/** Draw alpha of the selection content ghost while a move drag is in flight. */
+private const val SelectionInoutAlpha = 0.6f
 
 /** Max time between taps of a double tap. */
 private const val DoubleTapTimeoutMillis = 280L
@@ -118,8 +123,9 @@ private sealed interface GestureMode {
  * (previous frame 0.4, next frame 0.25 alpha) -> the composited frame
  * (nearest-neighbor) -> per-pixel grid (from 4x when enabled) -> stroke
  * preview blocks -> dashed shape preview -> marching-ants selection ->
- * symmetry guides -> cursor crosshair. All colors come from
- * [MaterialTheme.colorScheme]; the grid gray is the only literal color.
+ * symmetry guides -> cursor crosshair. Chrome colors come from [theme]; when
+ * the host omits it, [LocalPixelTheme] is read (the suite dark preset by
+ * default).
  *
  * Gestures:
  * * single finger performs the [DrawTool] action — pencil/eraser strokes are
@@ -136,9 +142,17 @@ private sealed interface GestureMode {
  * committed as drawn so far, while shape/select/move gestures are cancelled
  * (select/move restore the pre-gesture selection).
  *
+ * * MOVE additionally reports the committed translation through
+ *   [onMoveSelection] `(selection, dx, dy)` — the canvas only previews the
+ *   drag; the host performs the actual content move (see
+ *   [PixelEditorScaffold]).
+ *
  * The cursor readout ([onCursorMove]) fires for hover and drag alike; hosts
  * typically render [PixelCursorReadout] with the last value. When [playing]
  * is true the component renders read-only and ignores all input.
+ *
+ * @param theme suite theme supplying canvas chrome colors (checkerboard,
+ *   grid, marching ants, guides); defaults to [LocalPixelTheme].
  *
  * @param project project whose frame is displayed; its dimensions define the
  * pixel grid. The frame is centered once per project id on the first
@@ -175,16 +189,21 @@ fun PixelCanvasPro(
     onFill: (PixelPoint) -> Unit = {},
     onPick: (PixelPoint) -> Unit = {},
     onSelectionChange: (Rect?) -> Unit = {},
+    onMoveSelection: (Rect, Int, Int) -> Unit = { _, _, _ -> },
     onCursorMove: (PixelPointerInfo?) -> Unit = {},
     strokeColor: Int = DefaultStrokeColor,
     strokePreview: List<PixelPoint> = emptyList(),
     shapePreview: List<PixelPoint>? = null,
     playing: Boolean = false,
+    /** Onion-skin ghost opacity `0..1`; the timeline slider finally reaches the ghosts. */
+    onionAlpha: Float = 0.3f,
+    theme: PixelTheme = LocalPixelTheme.current,
 ) {
     val currentProject = rememberUpdatedState(project)
     // MutableState (not rememberUpdatedState) because the pointer handlers
     // read it lazily while composition keeps it fresh for every frame.
     val currentFrame = remember { mutableStateOf<PixelFrame?>(null) }
+    val currentOnMoveSelection = rememberUpdatedState(onMoveSelection)
     val currentOnDrawPixels = rememberUpdatedState(onDrawPixels)
     val currentOnFill = rememberUpdatedState(onFill)
     val currentOnPick = rememberUpdatedState(onPick)
@@ -216,6 +235,7 @@ fun PixelCanvasPro(
     val liveStroke = remember { mutableStateListOf<PixelPoint>() }
     val strokeKeys = remember { HashSet<Long>() }
     var liveShape by remember { mutableStateOf<List<PixelPoint>>(emptyList()) }
+    val selectionOffset = remember { mutableStateOf(0f to 0f) }
     var hoverPosition by remember { mutableStateOf<Offset?>(null) }
     val activePointers = remember { mutableStateOf(0) }
     val gestureStartSelection = remember { mutableStateOf<Rect?>(null) }
@@ -237,10 +257,14 @@ fun PixelCanvasPro(
         label = "selectionAntsPhase",
     )
 
-    val scheme = MaterialTheme.colorScheme
-    val checkerLight = scheme.surface
-    val checkerDark = scheme.surfaceVariant
-    val gridColor = Color.Gray.copy(alpha = GridAlpha)
+    val checkerLight = theme.colors.canvasCheckerLight.argbColor()
+    val checkerDark = theme.colors.canvasCheckerDark.argbColor()
+    val gridColor = theme.colors.gridLine.argbColor()
+    val antsDark = theme.colors.selectionAntsB.argbColor()
+    val antsLight = theme.colors.selectionAntsA.argbColor()
+    val guideA = theme.primary
+    val guideB = theme.accent
+    val crosshairColor = theme.primary.copy(alpha = CrosshairAlpha)
 
     /**
      * Maps a canvas-local screen position to the grid cell under it (live
@@ -338,6 +362,9 @@ fun PixelCanvasPro(
             .fillMaxSize()
             .clipToBounds()
             .onSizeChanged { size ->
+                // Report the viewport so CanvasState.fitToView() can work.
+                state.viewportWidth = size.width
+                state.viewportHeight = size.height
                 if (size.width > 0 && size.height > 0 && centeredFor.value != project.id) {
                     centeredFor.value = project.id
                     val cellSize = BasePixelCellSize * state.zoom
@@ -352,7 +379,10 @@ fun PixelCanvasPro(
                         val event = awaitPointerEvent()
                         if (currentPlaying.value) continue
                         val change = event.changes.firstOrNull() ?: continue
-                        if (!change.pressed) emitCursor(change.position)
+                        // Hover AND drag alike: the cursor readout/crosshair
+                        // must track the pointer while a stroke is in flight,
+                        // otherwise the crosshair freezes at the stroke start.
+                        emitCursor(change.position)
                     }
                 }
             }
@@ -413,12 +443,15 @@ fun PixelCanvasPro(
                                 downCell.y >= sel.top && downCell.y < sel.bottom
                             if (inside) {
                                 gestureStartSelection.value = sel
+                                selectionOffset.value = 0f to 0f
                                 mode = GestureMode.MoveSelection(downCell, sel!!)
                             }
                         }
                     }
                     var moved = false
                     var lastCell = downCell
+                    var moveDx = 0
+                    var moveDy = 0
                     var lastPos = down.position
                     var handedOff = false
                     var tracking = true
@@ -437,6 +470,14 @@ fun PixelCanvasPro(
                             if (!handedOff) emitCursor(change.position)
                         }
                         val pressedCount = event.changes.count { it.pressed }
+
+                        // Claim active gestures: without consuming the
+                        // changes, the compact layout's verticalScroll
+                        // interprets the same motion after touch slop and
+                        // the whole editor scrolls WHILE the stroke draws.
+                        if (mode !is GestureMode.Passive) {
+                            change.consume()
+                        }
 
                         if (handedOff) {
                             if (!change.pressed || pressedCount == 0) tracking = false
@@ -464,6 +505,14 @@ fun PixelCanvasPro(
                                     currentOnSelectionChange.value.invoke(committed)
                                 }
                                 is GestureMode.MoveSelection -> {
+                                    selectionOffset.value = 0f to 0f
+                                    if (moved && (moveDx != 0 || moveDy != 0)) {
+                                        currentOnMoveSelection.value.invoke(
+                                            gestureStartSelection.value!!,
+                                            moveDx,
+                                            moveDy,
+                                        )
+                                    }
                                     currentOnSelectionChange.value.invoke(state.selection)
                                 }
                                 GestureMode.Passive -> Unit
@@ -483,7 +532,10 @@ fun PixelCanvasPro(
                                 }
                                 is GestureMode.Shape -> liveShape = emptyList()
                                 is GestureMode.SelectRect -> state.selection = gestureStartSelection.value
-                                is GestureMode.MoveSelection -> state.selection = gestureStartSelection.value
+                                is GestureMode.MoveSelection -> {
+                                    state.selection = gestureStartSelection.value
+                                    selectionOffset.value = 0f to 0f
+                                }
                                 GestureMode.Passive -> Unit
                             }
                         } else {
@@ -496,12 +548,17 @@ fun PixelCanvasPro(
                                     is GestureMode.Stroke -> addStrokeCells(brushStamp(cell, state.brushSize))
                                     is GestureMode.Shape -> updateShapePreview(mode, cell)
                                     is GestureMode.SelectRect -> state.selection = rectFromCells(mode.anchor, cell)
-                                    is GestureMode.MoveSelection -> state.selection = translatedSelection(
-                                        mode,
-                                        cell,
-                                        currentProject.value.width,
-                                        currentProject.value.height,
-                                    )
+                                    is GestureMode.MoveSelection -> {
+                                        state.selection = translatedSelection(
+                                            mode,
+                                            cell,
+                                            currentProject.value.width,
+                                            currentProject.value.height,
+                                        )
+                                        moveDx = state.selection!!.left.toInt() - mode.original.left.toInt()
+                                        moveDy = state.selection!!.top.toInt() - mode.original.top.toInt()
+                                        selectionOffset.value = moveDx.toFloat() to moveDy.toFloat()
+                                    }
                                     GestureMode.Passive -> Unit
                                 }
                             }
@@ -512,12 +569,21 @@ fun PixelCanvasPro(
             }
             .pointerInput(state) {
                 // Two-finger pan/zoom; pan applies only with 2+ pointers down.
-                detectTransformGestures { _, pan, zoomFactor, _ ->
+                // Zoom anchors at the gesture CENTROID (the discarded first
+                // parameter): scaling around the canvas origin let the
+                // content under the fingers slide away during a pinch.
+                detectTransformGestures { centroid, pan, zoomFactor, _ ->
                     if (currentPlaying.value) return@detectTransformGestures
-                    state.zoom = state.clampZoom(state.zoom * zoomFactor)
+                    val oldZoom = state.zoom
+                    val newZoom = state.clampZoom(oldZoom * zoomFactor)
+                    state.zoom = newZoom
                     if (activePointers.value >= 2) {
-                        state.panX += pan.x
-                        state.panY += pan.y
+                        // Focal-point math: keep the canvas point under the
+                        // centroid stationary while the scale changes, then
+                        // apply the gesture pan.
+                        val scale = if (oldZoom > 0f) newZoom / oldZoom else 1f
+                        state.panX = centroid.x - (centroid.x - state.panX) * scale + pan.x
+                        state.panY = centroid.y - (centroid.y - state.panY) * scale + pan.y
                     }
                 }
             },
@@ -557,13 +623,16 @@ fun PixelCanvasPro(
             }
         }
 
-        // 2. Onion skins ghosted underneath the main frame.
+        // 2. Onion skins ghosted underneath the main frame. The host's
+        // onionAlpha (timeline slider) drives the ghosts; the previous
+        // frame stays slightly stronger than the next, as before.
+        val alphaBase = onionAlpha.coerceIn(0f, 1f)
         onionSkins.first?.let {
             drawImage(
                 it,
                 dstOffset = dstTopLeft,
                 dstSize = dstSize,
-                alpha = OnionPreviousAlpha,
+                alpha = alphaBase,
                 filterQuality = FilterQuality.None,
             )
         }
@@ -572,7 +641,7 @@ fun PixelCanvasPro(
                 it,
                 dstOffset = dstTopLeft,
                 dstSize = dstSize,
-                alpha = OnionNextAlpha,
+                alpha = alphaBase * (OnionNextAlpha / OnionPreviousAlpha),
                 filterQuality = FilterQuality.None,
             )
         }
@@ -649,10 +718,8 @@ fun PixelCanvasPro(
             if (right > left && bottom > top) {
                 val perimeter = (right - left) * 2 + (bottom - top) * 2
                 val shift = (antsPhase.value * perimeter).toInt()
-                val antDark = scheme.inverseSurface
-                val antLight = scheme.surface
                 fun antCell(x: Int, y: Int, index: Int) {
-                    val color = if ((index + shift) % 2 == 0) antDark else antLight
+                    val color = if ((index + shift) % 2 == 0) antsDark else antsLight
                     drawRect(
                         color = color,
                         topLeft = Offset(origin.x + x * cell, origin.y + y * cell),
@@ -669,12 +736,46 @@ fun PixelCanvasPro(
                     antCell(right - 1, y, k++)
                 }
             }
+            // Move-drag ghost: the ORIGINAL selection's content drawn at its
+            // translated position (clip = in-bounds part), so the preview
+            // matches what a commit will paint. The rect bounds above are
+            // already the TRANSLATED selection — iterating them while adding
+            // the offset again sampled the wrong pixels at double speed.
+            // Drawn last so it covers the moved ants.
+            val (offX, offY) = selectionOffset.value
+            if (offX != 0f || offY != 0f) {
+                val src = currentFrame.value
+                val original = gestureStartSelection.value
+                if (src != null && original != null) {
+                    val oLeft = original.left.toInt().coerceIn(0, p.width)
+                    val oTop = original.top.toInt().coerceIn(0, p.height)
+                    val oRight = original.right.toInt().coerceIn(0, p.width)
+                    val oBottom = original.bottom.toInt().coerceIn(0, p.height)
+                    val dx = offX.toInt()
+                    val dy = offY.toInt()
+                    for (y in oTop until oBottom) {
+                        for (x in oLeft until oRight) {
+                            val color = src[x, y]
+                            if (color == 0) continue
+                            val tx = x + dx
+                            val ty = y + dy
+                            if (tx < 0 || ty < 0 || tx >= p.width || ty >= p.height) continue
+                            drawRect(
+                                color = Color(color),
+                                topLeft = Offset(origin.x + tx * cell, origin.y + ty * cell),
+                                size = Size(cell, cell),
+                                alpha = SelectionInoutAlpha,
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // 8. Symmetry guide axes: two-color dashed lines through the middle.
         if (state.symmetry != CanvasSymmetry.OFF) {
-            val axisA = scheme.primary
-            val axisB = scheme.tertiary
+            val axisA = guideA
+            val axisB = guideB
             val thickness = max(2f, cell / 6f)
             if (state.symmetry == CanvasSymmetry.HORIZONTAL || state.symmetry == CanvasSymmetry.FOUR_WAY) {
                 val ay = origin.y + (p.height / 2f) * cell
@@ -717,7 +818,6 @@ fun PixelCanvasPro(
         // 9. Cursor crosshair: full-height/width hairlines in translucent primary.
         val hover = hoverPosition
         if (hover != null && !playing) {
-            val crosshairColor = scheme.primary.copy(alpha = CrosshairAlpha)
             drawLine(
                 color = crosshairColor,
                 start = Offset(hover.x, 0f),

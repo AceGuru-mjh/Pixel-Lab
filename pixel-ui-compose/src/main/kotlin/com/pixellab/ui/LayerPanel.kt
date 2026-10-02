@@ -21,13 +21,21 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.focus.onFocusChanged
 import com.pixellab.core.model.Layer
 import com.pixellab.core.model.SpriteProject
 import kotlin.math.roundToInt
@@ -53,6 +61,8 @@ private val LayerMetaFontSize = 12.sp
  *
  * - an opacity slider (`0..1`, continuously reported through
  *   [onLayerOpacityChange]) with the current percentage;
+ * - a name editor (inline text field, committed on keyboard Done or focus
+ *   loss) reporting [onRenameLayer];
  * - a lock toggle (lock / lock-open) reporting [onLayerLockedChange];
  * - move-up / move-down buttons reporting [onMoveLayer] with the layer id and
  *   the target index in the bottom-up stack (`idx + 1` moves the layer up,
@@ -69,7 +79,7 @@ private val LayerMetaFontSize = 12.sp
  * @param onAddLayer invoked with a proposed name for the new layer.
  * @param onRemoveLayer invoked with the id of the active layer to delete.
  * @param onRenameLayer contract callback; this panel intentionally renders
- * the layer name as static text, so the parameter is accepted but unused.
+ * the selected row's inline rename editor (IME Done or focus loss).
  * @param onMoveLayer invoked with (layer id, target bottom-up index).
  * @param onLayerOpacityChange invoked with (layer id, new opacity in 0..1).
  * @param onLayerVisibleChange invoked with (layer id, new visibility).
@@ -105,6 +115,7 @@ fun LayerPanel(
                 canMoveUp = index < layers.lastIndex,
                 canMoveDown = index > 0,
                 onActiveLayerChange = onActiveLayerChange,
+                onRenameLayer = onRenameLayer,
                 onMoveLayer = onMoveLayer,
                 onLayerOpacityChange = onLayerOpacityChange,
                 onLayerVisibleChange = onLayerVisibleChange,
@@ -144,6 +155,7 @@ private fun LayerRow(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onActiveLayerChange: (Int) -> Unit,
+    onRenameLayer: (Int, String) -> Unit,
     onMoveLayer: (Int, Int) -> Unit,
     onLayerOpacityChange: (Int, Float) -> Unit,
     onLayerVisibleChange: (Int, Boolean) -> Unit,
@@ -182,6 +194,41 @@ private fun LayerRow(
             }
         }
         if (selected) {
+            // Inline rename editor: local draft, committed on IME Done or
+            // focus loss; blank names are ignored (matches the session's
+            // rename guard).
+            var nameDraft by remember(layer.id) { mutableStateOf(layer.name) }
+            LaunchedEffect(layer.id, layer.name) {
+                if (nameDraft.isBlank() || nameDraft != layer.name && !nameDraft.isBlank()) {
+                    nameDraft = layer.name
+                }
+            }
+            val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+            OutlinedTextField(
+                value = nameDraft,
+                onValueChange = { nameDraft = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp)
+                    // Commit on focus loss too (tapping another layer used to
+                    // dispose the draft silently — Done was the only commit).
+                    .onFocusChanged { state ->
+                        if (!state.isFocused && nameDraft.isNotBlank() && nameDraft.trim() != layer.name) {
+                            onRenameLayer(layer.id, nameDraft.trim())
+                        }
+                    },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = LayerNameFontSize),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onDone = {
+                        if (nameDraft.isNotBlank() && nameDraft != layer.name) {
+                            onRenameLayer(layer.id, nameDraft.trim())
+                        }
+                        focusManager.clearFocus()
+                    },
+                ),
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { onLayerLockedChange(layer.id, !layer.locked) }) {
                     Icon(

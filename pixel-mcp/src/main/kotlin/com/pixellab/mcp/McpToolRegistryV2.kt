@@ -58,23 +58,23 @@ import kotlinx.coroutines.sync.withLock
  * execution is serialized through one mutex because the undo history inside
  * the engine is per-instance state.
  *
- * This object is self-hosting: it lazily creates its own [PixelLab]
- * (plus a [PixelToolbox] facade and an [AnimationEffects] dispatcher), so
- * hosts that only want the second tier do not need to wire anything beyond
- * a [PixelSessionStore].
+ * The tier is constructed with the same [PixelLab] instance the server and
+ * every other tier share, so v2 mutations feed the ONE engine undo history
+ * that `project_undo` / eviction callbacks manage (a previous
+ * self-hosting design leaked a second, unreachable history per project id
+ * whenever sessions were evicted, replaced or the server restarted).
  */
-object McpToolRegistryV2 {
+class McpToolRegistryV2(private val lab: PixelLab) {
 
-    /** Maximum characters of serialized text returned inline by tools. */
-    private const val TEXT_RESULT_LIMIT: Int = 4000
+    private companion object {
+        /** Maximum characters of serialized text returned inline by tools. */
+        private const val TEXT_RESULT_LIMIT: Int = 4000
 
-    /** Upper bound for point lists echoed back to callers. */
-    private const val POINT_ECHO_LIMIT: Int = 2048
+        /** Upper bound for point lists echoed back to callers. */
+        private const val POINT_ECHO_LIMIT: Int = 2048
+    }
 
-    /** Shared lab instance backing every v2 handler (created on first use). */
-    private val lab: PixelLab by lazy { PixelLab.create() }
-
-    /** High-level toolbox over the shared engine (one undo entry per op). */
+    /** Shared lab instance backing every v2 handler (injected by the router). */
     private val toolbox: PixelToolbox by lazy { PixelToolbox(lab.engine) }
 
     /** Name-dispatched animation effects over the shared config. */
@@ -1138,9 +1138,13 @@ object McpToolRegistryV2 {
             required = listOf("template_id")) { params, store ->
             val templateId = params.string("template_id")
             val palette = optionalPaletteParam(params)
-            val project = com.pixellab.core.template.TemplateLibraryV2.build(templateId, palette)
+            val built = com.pixellab.core.template.TemplateLibraryV2.build(templateId, palette)
+            // Deterministic template ids collide across sessions (shared
+            // engine undo stack / eviction cross-clear) — mint a fresh id.
+            val project = built.copy(id = com.pixellab.core.model.SpriteFactory.defaultId())
             val session = if (params.has("session_id")) {
                 val existing = sessionOf(params, store)
+                lab.engine.clearHistory(existing.project.id)
                 requireNotNull(store.update(existing.id, project)) { "session '${existing.id}' vanished" }
             } else {
                 store.newSession(project.palette, project.width, project.height, project.name).also {
@@ -1186,20 +1190,20 @@ object McpToolRegistryV2 {
 
         add("project_load", "Rebuilds a session from project JSON text (version 2).", "project",
             "json" to "string", "session_id" to "string", required = listOf("json")) { params, store ->
-            val project = ProjectCodec.load(params.string("json"))
+            val decoded = ProjectCodec.load(params.string("json"))
+            // The wire text may carry a project id that another session
+            // already loaded (identical text → identical id); mint a fresh
+            // id so sessions never share an engine undo stack.
+            val project = decoded.copy(id = com.pixellab.core.model.SpriteFactory.defaultId())
             val session = if (params.has("session_id")) {
                 val existing = sessionOf(params, store)
+                lab.engine.clearHistory(existing.project.id)
                 requireNotNull(store.update(existing.id, project)) { "session '${existing.id}' vanished" }
             } else {
                 store.newSession(project.palette, project.width, project.height, project.name).also {
                     store.update(it.id, project)
                 }
             }
-            // Load boundary: the wire document carries the project's id, so
-            // loading the same text into two sessions (or twice into one)
-            // would otherwise share ONE engine undo stack and cross-pollute
-            // unrelated edits — clear whatever history the id accumulated.
-            lab.engine.clearHistory(project.id)
             projectSummary(session, project).toMutable().put("loaded", true).build()
         }
 

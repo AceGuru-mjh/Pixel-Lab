@@ -85,6 +85,11 @@ class PixelSessionStoreTest {
         assertTrue(projects.isEmpty())
     }
 
+    @Test(expected = IllegalArgumentException::class)
+    fun `zero session capacity is rejected`() {
+        PixelSessionStore(maxSessions = 0)
+    }
+
     @Test
     fun `update swapping project lineage fires project discard`() {
         val (s, projects, _) = store()

@@ -128,8 +128,17 @@ fun PaletteEditor(
     // Inline replacement editor state: draft color + expanded flag.
     var replacing by remember { mutableStateOf(false) }
     var draftColor by remember { mutableStateOf(currentColor) }
+    // Keep the draft glued to the SELECTED swatch: with Replace open, tapping
+    // a different swatch used to keep adjusting the OLD draft — Apply then
+    // wrote the old swatch's derived color into the NEWLY selected index.
+    androidx.compose.runtime.LaunchedEffect(safeSelected) {
+        if (replacing && safeSelected >= 0) draftColor = palette[safeSelected]
+    }
 
     var sortMenuOpen by remember { mutableStateOf(false) }
+    // Pre-sort order snapshot: "Original" restores from it (the identity
+    // rewrite was a silent no-op — EditorSession skips equal-content edits).
+    val originalColors = remember(palette.id) { palette.colors.copyOf() }
 
     Column(modifier = modifier) {
         // ---- swatch grid --------------------------------------------------
@@ -191,7 +200,7 @@ fun PaletteEditor(
                     text = { Text(text = "Original") },
                     onClick = {
                         sortMenuOpen = false
-                        onPaletteChange(palette.withColors(palette.colors))
+                        onPaletteChange(palette.withColors(originalColors.copyOf()))
                     },
                 )
             }

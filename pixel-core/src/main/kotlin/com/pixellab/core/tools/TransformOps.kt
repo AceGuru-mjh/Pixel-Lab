@@ -32,30 +32,20 @@ object TransformOps {
     }
 
     /**
-     * Nearest-neighbor resample of [frame] at `factor`x **keeping the frame
-     * dimensions** — a zoom about [anchor] with the overflowing content
-     * cropped away (for a canvas-growing upscale use
-     * [PixelFrame.scaledNearest]).
+     * Nearest-neighbor integer upscale of [frame] to `width*factor x
+     * height*factor` — every input pixel maps onto a `factor x factor`
+     * output block. (For a zoom that KEEPS the frame dimensions, crop the
+     * result or use [com.pixellab.core.model.PixelFrame] windowing.)
      *
-     * Offset semantics: the scaled image measures `width * factor x
-     * height * factor`; the returned `width x height` window shows
-     *
-     *  * [Anchor.TOP_LEFT]: the window at offset `(0, 0)` — the source's
-     *    top-left region magnified;
-     *  * [Anchor.CENTER]: the window at offset `((width * factor - width) / 2,
-     *    (height * factor - height) / 2)` — the source center magnified
-     *    (integer division, deterministic for odd sizes);
-     *  * [Anchor.BOTTOM_RIGHT]: the window at offset `(width * factor -
-     *    width, height * factor - height)` — the source's bottom-right
-     *    region magnified.
-     *
-     * Every output pixel samples exactly one source pixel
-     * (`src((x + offsetX) / factor, (y + offsetY) / factor)`, floor
-     * division), so all three anchors fill the whole window with content —
-     * no transparent borders are introduced. `factor == 1` is the identity
+     * [anchor] is a reserved parameter kept for signature stability: with
+     * integer upscaling the block mapping leaves no content to shift, so
+     * every anchor value behaves identically. `factor == 1` is the identity
      * and returns [frame] itself.
      *
-     * @throws IllegalArgumentException when [factor] is below 1.
+     * @throws IllegalArgumentException when [factor] is below 1, either
+     *   scaled edge exceeds Int.MAX_VALUE, or the total pixel count
+     *   (computed in Long — the old Int multiply wrapped negative for
+     *   ~46341x46341 targets) exceeds the 268M budget.
      */
     fun scaleNearest(frame: PixelFrame, factor: Int, anchor: Anchor = Anchor.CENTER): PixelFrame {
         require(factor >= 1) { "factor must be >= 1 (was $factor)" }
@@ -70,7 +60,13 @@ object TransformOps {
         }
         val outWidth = scaledWidth.toInt()
         val outHeight = scaledHeight.toInt()
-        val out = IntArray(outWidth * outHeight)
+        // Long-domain total: each EDGE passing Int.MAX does not make the
+        // PRODUCT safe — `outWidth * outHeight` wrapped negative before.
+        val outPixels = outWidth.toLong() * outHeight.toLong()
+        require(outPixels <= 268_435_456L) {
+            "scaled target ${outWidth}x${outHeight} ($outPixels px) exceeds the 268M pixel budget"
+        }
+        val out = IntArray(outPixels.toInt())
         var index = 0
         for (y in 0 until outHeight) {
             val sampleY = y / factor

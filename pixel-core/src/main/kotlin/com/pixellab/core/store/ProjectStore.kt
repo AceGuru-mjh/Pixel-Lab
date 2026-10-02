@@ -125,6 +125,11 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
     /** The directory of project [id]. */
     private fun projectDir(id: String): File = File(projectsDir(), sanitize(id, "project"))
 
+    /** Deterministic document pick: newest mtime, name breaks ties. */
+    private fun pickDocument(docs: Array<out java.io.File>?): java.io.File? =
+        docs?.maxWithOrNull(compareBy({ it.lastModified() }, { it.name }))
+
+
     // ------------------------------------------------------------------
     // Save
     // ------------------------------------------------------------------
@@ -182,7 +187,7 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
                 }
             }
 
-            cache.put(project.id, project)
+            cache.put(sanitize(project.id, "project"), project)
             return document
         }
     }
@@ -206,7 +211,7 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
         val dirs = base.listFiles { f -> f.isDirectory } ?: return emptyList()
         for (dir in dirs.sortedBy { it.name }) {
             val docs = dir.listFiles { f -> f.name.endsWith(DOC_SUFFIX) } ?: continue
-            val document = docs.firstOrNull() ?: continue
+            val document = pickDocument(docs) ?: continue
             out.add(summaryOf(dir.name, document))
         }
         return out
@@ -248,7 +253,7 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
         val key = sanitize(id, "project")
         synchronized(lock) {
             cache.get(key)?.let { return it }
-            val document = projectDir(key).listFiles { f -> f.name.endsWith(DOC_SUFFIX) }?.firstOrNull()
+            val document = pickDocument(projectDir(key).listFiles { f -> f.name.endsWith(DOC_SUFFIX) })
                 ?: throw IllegalArgumentException("no project '$id' in ${root.absolutePath} (see list())")
             diskReads += 1
             val project = ProjectCodec.load(document.readText(Charsets.UTF_8))
@@ -281,7 +286,7 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
     fun thumbnail(id: String): ByteArray? {
         val key = sanitize(id, "project")
         synchronized(lock) {
-            val document = projectDir(key).listFiles { f -> f.name.endsWith(DOC_SUFFIX) }?.firstOrNull()
+            val document = pickDocument(projectDir(key).listFiles { f -> f.name.endsWith(DOC_SUFFIX) })
                 ?: return null
             val thumb = File(document.path + THUMB_SUFFIX)
             return if (thumb.isFile) thumb.readBytes() else null

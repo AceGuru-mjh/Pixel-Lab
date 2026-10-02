@@ -5,11 +5,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 import com.pixellab.ui.theme.PixelTheme
 
@@ -89,6 +91,10 @@ enum class ShortcutAction {
     NUDGE_DOWN,
     /** Select palette slot 1..9 (the digit itself is the shortcut's key). */
     SELECT_PALETTE_SLOT,
+    /** Delete/Backspace: clear the selection region to transparent. */
+    DELETE,
+    /** Select the whole canvas as the selection rectangle. */
+    SELECT_ALL,
     /** Space is held — canvas drags pan instead of drawing. */
     PAN_MODIFIER,
 }
@@ -111,9 +117,10 @@ enum class ShortcutAction {
  * | `+` / `=`, `-` | zoom in / out |
  * | `X` | swap colors |
  * | `Ctrl+S` | save |
- * | arrows | nudge selection |
+ * | `Delete` / `Backspace` | clear selection content |
+ * | `Ctrl+A` | select whole canvas |
+ * | arrows | nudge selection (or the active cel when nothing is selected) |
  * | `1..9` | select palette slot |
- * | `Space` | pan modifier |
  */
 class ShortcutMap {
 
@@ -134,14 +141,24 @@ class ShortcutMap {
         put(Shortcut("]"), ShortcutAction.BRUSH_GROW)
         put(Shortcut("+"), ShortcutAction.ZOOM_IN)
         put(Shortcut("="), ShortcutAction.ZOOM_IN)
+        // Key-name aliases: some event pipelines label the key instead of
+        // delivering the character code point.
+        put(Shortcut("Minus"), ShortcutAction.ZOOM_OUT)
+        put(Shortcut("Equals"), ShortcutAction.ZOOM_IN)
         put(Shortcut("-"), ShortcutAction.ZOOM_OUT)
         put(Shortcut("X"), ShortcutAction.SWAP_COLORS)
         put(Shortcut("S", ctrl = true), ShortcutAction.SAVE)
+        put(Shortcut("Delete"), ShortcutAction.DELETE)
+        put(Shortcut("Backspace"), ShortcutAction.DELETE)
+        put(Shortcut("A", ctrl = true), ShortcutAction.SELECT_ALL)
         put(Shortcut("Left"), ShortcutAction.NUDGE_LEFT)
         put(Shortcut("Right"), ShortcutAction.NUDGE_RIGHT)
         put(Shortcut("Up"), ShortcutAction.NUDGE_UP)
         put(Shortcut("Down"), ShortcutAction.NUDGE_DOWN)
-        put(Shortcut("Space"), ShortcutAction.PAN_MODIFIER)
+        // Space pan-modifier shortcut removed: Space is also a UI activation
+        // key (buttons, sliders) and a text-field keystroke; binding it
+        // globally swallowed those interactions. Pan is available via
+        // two-finger drag and the toolbar controls.
         for (digit in 1..9) put(Shortcut(digit.toString()), ShortcutAction.SELECT_PALETTE_SLOT)
     }
 
@@ -229,11 +246,10 @@ class ShortcutMap {
  * events pass through to the ancestors untouched.
  *
  * Stub-world note: the compile-only `KeyEvent` stub normalizes a key press
- * to (`key name`, ctrl/shift/alt flags) with no down/up distinction, so
- * [ShortcutAction.PAN_MODIFIER] fires on the Space *press* — a real-Compose
- * host bridges platform key events (key + `isCtrlPressed`/`isShiftPressed`/
- * `isAltPressed` extensions) into the same [ShortcutMap.find] call and may
- * additionally track key-up to release the pan mode.
+ * to (`key name`, ctrl/shift/alt flags) with no down/up distinction; real
+ * Compose hosts bridge platform key events (key + `isCtrlPressed`/
+ * `isShiftPressed`/`isAltPressed` extensions) into the same
+ * [ShortcutMap.find] call.
  *
  * @param theme active theme (reserved for future shortcut-help chrome).
  * @param map binding registry.
@@ -258,6 +274,12 @@ fun ShortcutLayer(
     val currentOnShortcut = rememberUpdatedState(onShortcut)
     Box(
         modifier = modifier.onKeyEvent { event: KeyEvent ->
+            // Dispatch on the initial press ONLY: Compose delivers KeyDown,
+            // KeyRepeat AND KeyUp to onKeyEvent, so without this gate every
+            // shortcut double-fired (Ctrl+Z undid TWO steps, X swapped
+            // colors back, arrows nudged 2px) and key-up leaked through
+            // focused text fields whose KeyDown they had consumed.
+            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
             val label = keyLabelOf(event)
             val shortcut = map.findShortcut(
                 label,

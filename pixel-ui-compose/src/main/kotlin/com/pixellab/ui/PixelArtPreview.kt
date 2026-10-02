@@ -177,7 +177,14 @@ fun PixelArtPreview(
         Canvas(modifier = Modifier.fillMaxWidth().aspectRatio(aspect)) {
             val fw = frame?.width ?: 1
             val fh = frame?.height ?: 1
-            val cell = style.scale
+            // Fit-to-view integer scale: the box is measured (width x
+            // width/aspect), so the largest integer cell that keeps the
+            // whole frame inside wins; the fixed style.scale=4 cropped any
+            // sprite wider than ~40px (a 64x64 art showed only its
+            // top-left 62%). style.scale remains the MAXIMUM zoom for
+            // hosts that pin a small canvas deliberately.
+            val fitScale = (size.width / fw).toInt().coerceAtLeast(1)
+            val cell = minOf(style.scale, fitScale)
             val outW = fw * cell
             val outH = fh * cell
             val tile = cell * CheckerTile

@@ -29,10 +29,10 @@
 | **对话内连接** | 直接对 Agent 说：「连接 MCP 服务器 http://127.0.0.1:8901/mcp，请求头 Authorization: Bearer <token>，然后列出工具」→ 宿主 `mcp_connect` 工具自动注册 | 临时试用 |
 | **市场页添加** | MCP 市场页手动填 streamable_http + URL | 有 UI 偏好的用户 |
 
-连接成功后 **174 个工具**以 `mcp__pixel-lab__*` 前缀注册为宿主一等工具，
+连接成功后 **182 个工具**以 `mcp__pixel-lab__*` 前缀注册为宿主一等工具，
 schema 自动并入 LLM 工具目录——无需任何宿主代码改动。
 
-### 3. 灌入技能（让 Agent 会用这 174 个工具）
+### 3. 灌入技能（让 Agent 会用这 182 个工具）
 
 `skills/` 目录下三个方法论技能（`apex-skill-v1` 格式，与宿主
 `SkillRegistry` 兼容）：

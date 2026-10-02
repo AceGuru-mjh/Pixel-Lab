@@ -212,8 +212,8 @@ private fun LayerRow(
                     .padding(horizontal = 4.dp)
                     // Commit on focus loss too (tapping another layer used to
                     // dispose the draft silently — Done was the only commit).
-                    .onFocusChanged { focused ->
-                        if (!focused && nameDraft.isNotBlank() && nameDraft.trim() != layer.name) {
+                    .onFocusChanged { state ->
+                        if (!state.isFocused && nameDraft.isNotBlank() && nameDraft.trim() != layer.name) {
                             onRenameLayer(layer.id, nameDraft.trim())
                         }
                     },

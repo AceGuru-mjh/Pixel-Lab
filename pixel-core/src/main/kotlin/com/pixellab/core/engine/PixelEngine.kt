@@ -265,6 +265,34 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
     }
 
     /**
+     * Replaces the cel of (`layerId`, `frameIndex`) — the engine-routed
+     * counterpart of `SpriteProject.withCel` for NON-active frames: the write
+     * honors the target layer's lock state and records one `"applyCel"` undo
+     * entry when the content changes. A `null` cel clears the target. An
+     * unchanged cel is a no-op (no history entry).
+     *
+     * @throws IllegalArgumentException when [layerId] is unknown,
+     *   [frameIndex] is out of bounds, [cel] does not match the canvas size
+     *   or the target layer is locked.
+     */
+    fun applyCel(project: SpriteProject, layerId: Int, frameIndex: Int, cel: PixelFrame?): SpriteProject {
+        val layer = project.layers.firstOrNull { it.id == layerId }
+            ?: throw IllegalArgumentException("Layer id $layerId not in layer stack")
+        require(frameIndex in project.frames.indices) {
+            "Frame index $frameIndex out of bounds (${project.frames.size} frames)"
+        }
+        require(!layer.locked) { "Layer '${layer.name}' (id=$layerId) is locked" }
+        cel?.let {
+            require(it.width == project.width && it.height == project.height) {
+                "Cel ${it.width}x${it.height} does not match canvas ${project.width}x${project.height}"
+            }
+        }
+        val after = project.withCel(layerId, frameIndex, cel)
+        if (after == project) return project
+        return commit(project, after, "applyCel")
+    }
+
+    /**
      * Draws a multi-point stroke: consecutive points are connected with
      * Bresenham segments of the given [thickness]; a single-point stroke
      * stamps a `thickness x thickness` dot. An empty point list is a no-op.

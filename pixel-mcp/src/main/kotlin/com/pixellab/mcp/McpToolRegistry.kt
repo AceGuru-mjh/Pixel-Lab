@@ -120,7 +120,7 @@ class McpToolRegistry(private val lab: PixelLab) {
      * exceptions signal tool execution failures.
      */
     suspend fun execute(name: String, params: JsonObject, store: PixelSessionStore): JsonObject {
-        val tool = byName[name] ?: throw McpToolException("unknown tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+        val tool = byName[name] ?: throw McpToolException("unknown tool '$name'", JsonRpc.INVALID_PARAMS)
         return try {
             mutex.withLock { tool.handler(params, store) }
         } catch (error: IllegalArgumentException) {
@@ -941,7 +941,12 @@ class McpToolRegistry(private val lab: PixelLab) {
 
         add("anim_set_fps", "Sets the project-wide playback fps (1..24).", "anim",
             "session_id" to "string", "fps" to "integer", required = listOf("session_id", "fps")) { params, store ->
-            mutate(params, store) { lab.animation.setFps(it, params.int("fps")) }
+            val fps = params.int("fps")
+            // Registry-level contract (the tool description says 1..24): the
+            // engine accepted 1..60000 and withFps silently coerced to 24,
+            // so fps=59000 "succeeded" reporting a value that never applied.
+            require(fps in 1..24) { "'fps' must be in [1, 24] (was $fps)" }
+            mutate(params, store) { lab.animation.setFps(it, fps) }
         }
 
         add("anim_tag", "Sets a named frame-span tag (or removes it with remove=true). start_frame/end_frame are required unless remove=true — the simplified schema has no conditional-required mechanism, so they stay optional here.", "anim",

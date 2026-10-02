@@ -113,7 +113,7 @@ class McpToolRegistryV2(private val lab: PixelLab) {
      * tool execution failures (surfaced as MCP `isError` envelopes).
      */
     suspend fun execute(name: String, params: JsonObject, store: PixelSessionStore): JsonObject {
-        val tool = byName[name] ?: throw McpToolException("unknown tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+        val tool = byName[name] ?: throw McpToolException("unknown tool '$name'", JsonRpc.INVALID_PARAMS)
         return try {
             mutex.withLock { tool.handler(params, store) }
         } catch (error: IllegalArgumentException) {
@@ -888,7 +888,9 @@ class McpToolRegistryV2(private val lab: PixelLab) {
 
         add("palette_harmony", "Builds a color harmony (complementary, triadic, ...) around a base color.", "palette",
             "base" to "string", "kind" to "string", "count" to "integer",
-            required = listOf("base", "kind")) { params, _ ->
+            // 'kind' optional: the handler defaults to complementary — the
+            // schema declaring it required contradicted the implementation.
+            required = listOf("base")) { params, _ ->
             val base = colorParam(params, "base")
             val kind = params.opt("kind", "complementary").trim().lowercase()
             val count = optionalInt(params, "count") ?: 5

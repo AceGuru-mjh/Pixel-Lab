@@ -55,6 +55,10 @@ data class SpriteProject(
             }
         }
         for (tag in tags) {
+            require(tag.startFrame >= 0) { "Tag '${tag.name}' startFrame ${tag.startFrame} must be >= 0" }
+            require(tag.startFrame <= tag.endFrame) {
+                "Tag '${tag.name}' span is reversed: startFrame ${tag.startFrame} > endFrame ${tag.endFrame}"
+            }
             require(tag.endFrame < frames.size) { "Tag '${tag.name}' endFrame ${tag.endFrame} out of bounds (${frames.size} frames)" }
         }
     }
@@ -136,7 +140,20 @@ data class SpriteProject(
         return copy(frames = value, activeFrameIndex = active, nextFrameId = maxOf(nextFrameId, activeIds.max() + 1))
     }
 
-    fun withTags(value: List<AnimationTag>): SpriteProject = copy(tags = value)
+    fun withTags(value: List<AnimationTag>): SpriteProject {
+        // copy() bypasses init; re-check the span contract (setTag already
+        // validates, but withTags is public).
+        for (tag in value) {
+            require(tag.startFrame >= 0) { "Tag '${tag.name}' startFrame ${tag.startFrame} must be >= 0" }
+            require(tag.startFrame <= tag.endFrame) {
+                "Tag '${tag.name}' span is reversed: startFrame ${tag.startFrame} > endFrame ${tag.endFrame}"
+            }
+            require(tag.endFrame < frames.size) {
+                "Tag '${tag.name}' endFrame ${tag.endFrame} out of bounds (${frames.size} frames)"
+            }
+        }
+        return copy(tags = value)
+    }
 
     /** Replaces the active cel; creating the frame's cel map copy as needed. */
     fun withActiveCel(cel: PixelFrame): SpriteProject {

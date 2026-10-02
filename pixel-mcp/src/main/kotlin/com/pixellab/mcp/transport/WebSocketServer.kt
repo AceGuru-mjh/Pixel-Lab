@@ -149,7 +149,11 @@ class WebSocketServer(
         private const val HANDSHAKE_TIMEOUT_MS: Int = 30_000
 
         /** Read timeout for idle established connections (ms). */
-        private const val IDLE_TIMEOUT_MS: Int = 0 // 0 = forever, RFC keeps WS open
+        // Idle read timeout: an unauthenticated/idle connection holding a
+        // registration slot forever was a permanent 64-slot DoS (64 silent
+        // sockets = the whole WS budget, every legit client 1013'd). The
+        // first timeout fires a server ping; the second closes (1001).
+        private const val IDLE_TIMEOUT_MS: Int = 60_000
 
         /** Upper bound on concurrent connections. Each connection owns a
          *  dedicated thread (~1 MB stack) and two FDs — unbounded accepts
@@ -323,6 +327,18 @@ class WebSocketServer(
                 // Already unusable.
             }
             closeQuietly(socket)
+        } catch (error: Throwable) {
+            // OutOfMemoryError / StackOverflowError from a hostile tool
+            // payload: the HTTP transport already caught Throwable; this
+            // side let it escape to the thread's uncaught handler, which
+            // on Android is KillApplicationHandler — the WHOLE host
+            // process (editor UI included) died. Best-effort drop, keep
+            // serving.
+            try {
+                logger?.invoke("conn#$id: fatal ${error.javaClass.simpleName}, dropping connection")
+            } catch (ignored: Throwable) {
+            }
+            closeQuietly(socket)
         } finally {
             connections.removeAll { it.id == id }
         }
@@ -367,9 +383,21 @@ class WebSocketServer(
         if (token != null) {
             val authorization = headers["authorization"] ?: ""
             val expected = "Bearer $token"
+            // OOB-safe constant-time compare: the old loop indexed `expected`
+            // with the ATTACKER-controlled header's indices — any header
+            // longer than "Bearer <64-hex>" threw StringIndexOutOfBounds
+            // (surfaced as 1011 "internal error" instead of a clean 401),
+            // and shorter headers leaked a prefix match early. Compare over
+            // the max of both lengths; the padding folds length mismatches
+            // into the same accumulated difference.
             var diff = 0
-            for (i in authorization.indices) diff = diff or (authorization[i].code xor expected[i].code)
-            val authorized = authorization.length == expected.length && diff == 0
+            val compareLength = maxOf(authorization.length, expected.length)
+            for (i in 0 until compareLength) {
+                val a = authorization.getOrNull(i)?.code ?: 0
+                val b = expected.getOrNull(i)?.code ?: 0
+                diff = diff or (a xor b)
+            }
+            val authorized = diff == 0
             if (!authorized) {
                 writeHttpResponse(
                     output,
@@ -463,14 +491,31 @@ class WebSocketServer(
     private fun messageLoop(connection: Connection) {
         var messageOpcode = -1 // -1 = no fragmented message in progress
         val fragments = ByteArrayOutputStream(1024)
+        var idleStrikes = 0
         while (true) {
-            val frame = readFrame(connection.input)
+            val frame = try {
+                readFrame(connection.input)
+            } catch (timeout: java.net.SocketTimeoutException) {
+                // soTimeout doubles as the idle probe: a silent client no
+                // longer pins its slot forever. First strike sends a ping
+                // (a live peer answers — any frame resets the strikes);
+                // the second strike evicts (1001 Going Away).
+                idleStrikes++
+                if (idleStrikes >= 2) {
+                    logger?.invoke("conn#" + connection.id + ": idle eviction after 2x" + IDLE_TIMEOUT_MS + "ms")
+                    sendClose(connection, 1001, "idle")
+                    return
+                }
+                sendPing(connection)
+                continue
+            }
+            idleStrikes = 0
 
             // Control frames never fragment and stay <= 125 payload bytes.
             when (frame.opcode) {
                 OP_CLOSE -> {
                     val (code, reason) = parseClosePayload(frame.payload)
-                    logger?.invoke("conn#${connection.id}: close $code '$reason'")
+                    logger?.invoke("conn#${connection.id}: close $code '${sanitizeLogText(reason)}'")
                     // Echo the peer's code only when it is a legal close code
                     // (RFC 6455 §7.4.1); codes like 999 or 1005/1006 must
                     // never appear ON the wire, so answer 1002 instead.
@@ -679,6 +724,24 @@ class WebSocketServer(
     /** Pong mirrors the ping payload (RFC 6455 §5.5.3). */
     private fun sendPong(connection: Connection, payload: ByteArray) {
         writeFrame(connection, fin = true, opcode = OP_PONG, payload = payload)
+    }
+
+    /** Liveness probe (RFC 6455 §5.5.2): one byte, no state. */
+    private fun sendPing(connection: Connection) {
+        writeFrame(connection, fin = true, opcode = OP_PING, payload = byteArrayOf(1))
+    }
+
+    /**
+     * Strips CR/LF and control characters from client-supplied text before
+     * it reaches the host logger: a 123-byte close reason used to be able
+     * to forge arbitrary lines in logcat.
+     */
+    private fun sanitizeLogText(text: String): String {
+        val out = StringBuilder(text.length)
+        for (ch in text) {
+            out.append(if (ch < ' ' || ch == '\u007F') ' ' else ch)
+        }
+        return out.toString().take(123)
     }
 
     /** Close frame with [code] + reason, then the caller drops the socket. */

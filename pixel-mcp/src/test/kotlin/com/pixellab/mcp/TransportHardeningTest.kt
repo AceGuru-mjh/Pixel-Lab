@@ -474,4 +474,133 @@ class TransportHardeningTest {
         assertTrue(restarted.port > 0)
         server.stop()
     }
+
+    // ---- security-round regression guards ------------------------------------
+
+    @Test
+    fun `duplicate content-length is rejected`() {
+        val (server, port, token) = bootServer()
+        try {
+            val payload = "{}"
+            val request = "POST /messages HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: 2\r\n" +
+                "Content-Length: 999\r\n" +
+                "Connection: close\r\n\r\n" +
+                payload
+            val (status, _) = httpExchange(port, request)
+            // Duplicated framing headers are a request-smuggling vector;
+            // the old parser resolved them last-wins silently.
+            assertTrue("expected 400, got '$status'", status.contains("400"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `content-length plus transfer-encoding is rejected`() {
+        val (server, port, token) = bootServer()
+        try {
+            val request = "POST /messages HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: 2\r\n" +
+                "Transfer-Encoding: chunked\r\n" +
+                "Connection: close\r\n\r\n" +
+                "{}"
+            val (status, _) = httpExchange(port, request)
+            assertTrue("expected 400, got '$status'", status.contains("400"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `non-object tools arguments answer invalid params`() {
+        val (server, port, token) = bootServer()
+        try {
+            val payload = """{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ping","arguments":[]}}"""
+            val request = "POST /messages HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: ${payload.toByteArray(Charsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                payload
+            val (status, body) = httpExchange(port, request)
+            assertTrue(status.contains("200"))
+            assertTrue(
+                "expected -32602 for array arguments, got: $body",
+                body.contains("-32602"),
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `oversized canvas is rejected by the pixel budget`() {
+        val (server, port, token) = bootServer()
+        try {
+            val payload = """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"canvas_create","arguments":{"width":8192,"height":8192}}}"""
+            val request = "POST /messages HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:$port\r\n" +
+                "Authorization: Bearer $token\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: ${payload.toByteArray(Charsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                payload
+            val (status, body) = httpExchange(port, request)
+            assertTrue(status.contains("200"))
+            // 8192^2 = 268 MB per cel: must fail the 4.19M-pixel budget,
+            // not the process.
+            assertTrue(
+                "expected the pixel-budget rejection, got: $body",
+                body.contains("pixel budget") || body.contains("isError"),
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `ws overlong authorization header answers 401 not a crash`() {
+        val ws = com.pixellab.mcp.transport.WebSocketServer(
+            0,
+            handler = { "" },
+            logger = null,
+            authToken = "a".repeat(64),
+        )
+        try {
+            val wsPort = ws.port
+            Socket("127.0.0.1", wsPort).use { socket ->
+                socket.soTimeout = 15_000
+                val out = socket.getOutputStream()
+                // The attacker-controlled header is LONGER than the expected
+                // value: the old constant-time loop indexed the expected
+                // string with these indices and threw (surfacing as 1011).
+                val request = "GET / HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1:$wsPort\r\n" +
+                    "Authorization: Bearer " + "a".repeat(200) + "\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+                    "Sec-WebSocket-Version: 13\r\n" +
+                    "\r\n"
+                out.write(request.toByteArray(Charsets.UTF_8))
+                out.flush()
+                val input = socket.getInputStream()
+                val status = readLine(input) ?: ""
+                assertTrue(
+                    "expected a clean 401, got '$status'",
+                    status.contains("401"),
+                )
+            }
+        } finally {
+            ws.close()
+        }
+    }
 }

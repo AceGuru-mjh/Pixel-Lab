@@ -72,6 +72,9 @@ class McpToolRegistryV2(private val lab: PixelLab) {
 
         /** Upper bound for point lists echoed back to callers. */
         private const val POINT_ECHO_LIMIT: Int = 2048
+
+        /** Text length accepted by the text tools (frame-width explosion guard). */
+        private const val MAX_TEXT_CHARS: Int = 4096
     }
 
     /** Shared lab instance backing every v2 handler (injected by the router). */
@@ -973,6 +976,9 @@ class McpToolRegistryV2(private val lab: PixelLab) {
             "vertical" to "boolean",
             required = listOf("session_id", "text")) { params, store ->
             val text = params.string("text")
+            require(text.length <= MAX_TEXT_CHARS) {
+                "'text' must be at most $MAX_TEXT_CHARS characters (was ${text.length})"
+            }
             val x = params.opt("x", 0)
             val y = params.opt("y", 0)
             require(x >= 0 && y >= 0) { "x/y must be non-negative (was x=$x, y=$y)" }
@@ -1035,6 +1041,9 @@ class McpToolRegistryV2(private val lab: PixelLab) {
             fun element(key: String): JsonElement? = optionsRaw?.raw(key) ?: params.raw(key)
             val text = (element("text") as? JsonString)?.value
                 ?: throw IllegalArgumentException("missing parameter 'text' (top level or inside 'options')")
+            require(text.length <= MAX_TEXT_CHARS) {
+                "'text' must be at most $MAX_TEXT_CHARS characters (was ${text.length})"
+            }
             val font = when ((element("font") as? JsonString)?.value ?: "5x7") {
                 "5x7" -> Font5x7
                 "8x8" -> Font8x8

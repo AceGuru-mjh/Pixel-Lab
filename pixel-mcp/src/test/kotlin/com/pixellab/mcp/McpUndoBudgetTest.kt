@@ -146,7 +146,9 @@ class McpUndoBudgetTest {
         val reversed = expectIAE {
             v1Tool("anim_tag", run("session_id" to sessionId, "name" to "bad", "start_frame" to 5, "end_frame" to 2))
         }
-        assertTrue(reversed.message!!, reversed.message!!.contains("reversed"))
+        // AnimationTag's own init catches the reversed span first with its
+        // phrasing; either message proves the span contract is enforced.
+        assertTrue(reversed.message!!, reversed.message!!.contains("startFrame"))
     }
 
     @Test

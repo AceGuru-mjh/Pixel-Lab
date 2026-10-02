@@ -31,10 +31,16 @@ object Resample {
     fun nearest(frame: PixelFrame, newWidth: Int, newHeight: Int): PixelFrame {
         require(newWidth > 0 && newHeight > 0) { "Target dimensions must be positive" }
         if (frame.width == newWidth && frame.height == newHeight) return frame
+        // Long-domain guard mirroring boxResample: `newWidth * newHeight` as
+        // Int wraps (65536x65536 -> 0 -> empty raster -> AIOOBE downstream).
+        val outPixels = newWidth.toLong() * newHeight.toLong()
+        require(outPixels <= 268_435_456L) {
+            "resample target ${newWidth}x${newHeight} ($outPixels px) exceeds the 268M pixel budget"
+        }
         val w = frame.width
         val h = frame.height
         val src = frame.pixels
-        val out = IntArray(newWidth * newHeight)
+        val out = IntArray(outPixels.toInt())
         for (y in 0 until newHeight) {
             // Half-pixel center: (y + 0.5) * h / newHeight, floored.
             val sy = floor((y + 0.5) * h / newHeight).toInt().coerceIn(0, h - 1)

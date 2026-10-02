@@ -206,7 +206,13 @@ class CommandHistory(private val limit: Int = 64) {
         currentState = after
         val key = command.coalesceKey
         val top = undoStack.lastOrNull()
-        if (key != null && top != null && top.command.coalesceKey == key) {
+        // Coalesce only on a CONTINUOUS chain: before == top.after proves the
+        // editor state flows from the entry being extended. Without the
+        // continuity check, a diverged editor recording the same coalesce
+        // key (e.g. after an out-of-band document swap) stitched unrelated
+        // states into one undo step — the exact divergence undo() guards
+        // against, record() used to not.
+        if (key != null && top != null && top.command.coalesceKey == key && before == top.after) {
             undoStack.removeLast()
             undoStack.addLast(HistoryEntry(top.command, top.before, after, now()))
             redoStack.clear()

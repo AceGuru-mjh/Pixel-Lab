@@ -35,7 +35,13 @@ class PixelFrame private constructor(
     companion object {
         /**
          * Creates a frame from a row-major ARGB pixel array. The array is
-         * referenced directly (not copied) and must not be mutated afterwards.
+         * COPIED — callers may freely reuse or mutate their buffer afterwards
+         * (the earlier reference-sharing contract was a documented-but-weak
+         * invariant: one escaped mutation silently corrupted every bitmap
+         * cache and shared cel keyed on this frame, and froze its cached
+         * hashCode at the pre-mutation value). Hot internal paths that build
+         * a fresh array and hand over ownership use the private constructor
+         * instead, keeping one copy at most.
          *
          * @throws IllegalArgumentException if dimensions are non-positive or the
          * array size does not equal `width * height`.
@@ -45,6 +51,21 @@ class PixelFrame private constructor(
             // Long-domain: `width * height` on Ints wraps (e.g. 65536x65536
             // == 0), which would let a 0-length array masquerade as a valid
             // frame and later corrupt native heap writes.
+            require(pixels.size.toLong() == width.toLong() * height.toLong()) {
+                "Pixel array size ${pixels.size} does not match ${width}x${height}"
+            }
+            return PixelFrame(width, height, pixels.copyOf())
+        }
+
+        /**
+         * Module-internal trusted hand-off: adopts [pixels] WITHOUT copying.
+         * Use only when the array was freshly built for this call and no
+         * caller retains a reference (engine/composite hot paths —
+         * `compositeFrame` runs once per preview refresh and stroke commit,
+         * where `of`'s defensive copy would double every allocation).
+         */
+        internal fun adopt(width: Int, height: Int, pixels: IntArray): PixelFrame {
+            require(width > 0 && height > 0) { "Frame dimensions must be positive (w=$width, h=$height)" }
             require(pixels.size.toLong() == width.toLong() * height.toLong()) {
                 "Pixel array size ${pixels.size} does not match ${width}x${height}"
             }
@@ -251,8 +272,9 @@ class PixelFrame private constructor(
 
 /**
  * Mutable workspace counterpart of [PixelFrame] for bulk edits. Convert to an
- * immutable frame with [toImmutable]; the workspace array is copied on hand-off
- * so the immutable frame stays truly immutable.
+ * immutable frame with [toImmutable]; the hand-off copies the workspace array
+ * (via [PixelFrame.of]'s defensive copy) so the immutable frame stays truly
+ * immutable even while the workspace keeps evolving.
  */
 class MutablePixelFrame(val width: Int, val height: Int) {
     init {
@@ -287,5 +309,5 @@ class MutablePixelFrame(val width: Int, val height: Int) {
     fun clear() = pixels.fill(0)
 
     /** Snapshot into an immutable frame (copies the backing array). */
-    fun toImmutable(): PixelFrame = PixelFrame.of(width, height, pixels.copyOf())
+    fun toImmutable(): PixelFrame = PixelFrame.of(width, height, pixels)
 }

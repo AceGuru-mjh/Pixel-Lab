@@ -96,7 +96,7 @@ data class SpriteProject(
                 out[i] = compositePixel(s, sa, d)
             }
         }
-        return PixelFrame.of(width, height, out)
+        return PixelFrame.adopt(width, height, out)
     }
 
     /** Quick composition of the active frame; see [compositeFrame]. */
@@ -128,6 +128,9 @@ data class SpriteProject(
 
     fun withFrames(value: List<Frame>): SpriteProject {
         require(value.isNotEmpty()) { "Project must keep at least one frame" }
+        // data-class copy() bypasses init's structural validation, so the
+        // with* family re-checks what compositeFrame relies on: cel geometry.
+        validateCelGeometry(value)
         val active = activeFrameIndex.coerceIn(value.indices)
         val activeIds = value.map { it.id }
         return copy(frames = value, activeFrameIndex = active, nextFrameId = maxOf(nextFrameId, activeIds.max() + 1))
@@ -149,10 +152,31 @@ data class SpriteProject(
     fun withCel(layerId: Int, frameIndex: Int, cel: PixelFrame?): SpriteProject {
         require(layerId in layers.map { it.id }) { "Layer id $layerId not in layer stack" }
         require(frameIndex in frames.indices) { "Frame index $frameIndex out of bounds" }
+        // withActiveCel validates this; withCel used to skip it, letting a
+        // mismatched cel enter via copy() and later crash compositeFrame
+        // with ArrayIndexOutOfBounds instead of a proper IAE.
+        cel?.let {
+            require(it.width == width && it.height == height) {
+                "Cel ${it.width}x${it.height} does not match project ${width}x${height}"
+            }
+        }
         val next = frames[frameIndex].withCel(layerId, cel)
         val newFrames = frames.toMutableList()
         newFrames[frameIndex] = next
         return copy(frames = newFrames)
+    }
+
+    /** init's cel geometry checks, reused by the with* copy family. */
+    private fun validateCelGeometry(frames: List<Frame>) {
+        val layerIds = layers.map { it.id }.toSet()
+        for ((i, frame) in frames.withIndex()) {
+            for ((layerId, cel) in frame.cels) {
+                require(layerId in layerIds) { "Frame $i references unknown layer $layerId" }
+                require(cel.width == width && cel.height == height) {
+                    "Frame $i layer $layerId cel is ${cel.width}x${cel.height}, project is ${width}x${height}"
+                }
+            }
+        }
     }
 
     /** Allocates a fresh layer id. */

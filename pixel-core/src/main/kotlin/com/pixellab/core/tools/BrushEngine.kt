@@ -208,12 +208,15 @@ class BrushEngine(val seed: Long = 0x504958L) {
     private fun deStep(centers: List<PixelPoint>): List<PixelPoint> {
         val accepted = LinkedHashSet<PixelPoint>()
         for (c in centers) {
+            // The +1 probes overflow at Int.MAX_VALUE and PixelPoint's
+            // non-negative require then rejected the whole stroke; guard both
+            // directions symmetrically (the -1 side always had `> 0` guards).
             val hasHorizontalNeighbor =
                 (c.x > 0 && PixelPoint(c.x - 1, c.y) in accepted) ||
-                    PixelPoint(c.x + 1, c.y) in accepted
+                    (c.x < Int.MAX_VALUE && PixelPoint(c.x + 1, c.y) in accepted)
             val hasVerticalNeighbor =
                 (c.y > 0 && PixelPoint(c.x, c.y - 1) in accepted) ||
-                    PixelPoint(c.x, c.y + 1) in accepted
+                    (c.y < Int.MAX_VALUE && PixelPoint(c.x, c.y + 1) in accepted)
             if (hasHorizontalNeighbor && hasVerticalNeighbor) continue
             accepted.add(c)
         }

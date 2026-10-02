@@ -57,7 +57,8 @@ data class ImageData(
     }
 
     fun toFrame(): com.pixellab.core.model.PixelFrame =
-        com.pixellab.core.model.PixelFrame.of(width, height, pixels.copyOf())
+        // of() already takes a defensive copy of the caller's array.
+        com.pixellab.core.model.PixelFrame.of(width, height, pixels)
 }
 
 /** One raster-to-pixel-art conversion request. */

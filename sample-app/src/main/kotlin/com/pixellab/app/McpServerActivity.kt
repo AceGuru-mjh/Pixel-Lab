@@ -38,7 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pixellab.core.store.SlotStore
-import com.pixellab.core.store.SlotSummary
+import com.pixellab.core.store.SlotStore.SlotSummary
 import com.pixellab.mcp.PixelMcpServer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

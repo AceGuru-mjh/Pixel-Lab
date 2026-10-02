@@ -339,8 +339,14 @@ class PixelMcpServer(
     /** Handshake result: protocol version, capabilities and server identity. */
     private fun initializeResult(request: JsonObject): JsonObject {
         val requested = (request.raw("params") as? JsonObject)?.raw("protocolVersion") as? JsonString
+        // Version NEGOTIATION, not echo: the MCP spec requires the server to
+        // answer with a version it actually supports when the requested one
+        // is unknown — echoing an arbitrary string let clients believe
+        // 2025-06-18 semantics (batching removal, structuredContent) were in
+        // effect while the server implements 2024-11-05 only.
+        val negotiated = if (requested?.value == PROTOCOL_VERSION) requested.value else PROTOCOL_VERSION
         return jsonobj {
-            put("protocolVersion", requested?.value ?: PROTOCOL_VERSION)
+            put("protocolVersion", negotiated)
             put(
                 "capabilities",
                 jsonobj {

@@ -60,7 +60,7 @@ import kotlinx.coroutines.sync.withLock
  *
  * Same strategy as v2–v4: a *standalone dispatcher* chained into
  * [McpToolRouter]; unknown tool names throw [McpToolException] with
- * `JsonRpc.METHOD_NOT_FOUND` so the router keeps walking the chain.
+ * `JsonRpc.INVALID_PARAMS` for unknown names (MCP spec maps unknown tools/call tools to invalid params).
  *
  * @param lab shared engine facade — used for `peekBefore` (last-op diffs);
  *   kept even when unused for wiring parity with v1–v4.
@@ -83,11 +83,11 @@ class McpToolRegistryV5(private val lab: PixelLab = PixelLab.create()) {
 
     /**
      * Dispatches one `tools/call`. Throws [McpToolException] with
-     * `METHOD_NOT_FOUND` for unknown names (the tier-chain contract).
+     * `INVALID_PARAMS` for unknown names (the tier-chain contract).
      */
     suspend fun execute(name: String, args: JsonObject, store: PixelSessionStore): JsonObject {
         val tool = tools.firstOrNull { it.name == name }
-            ?: throw McpToolException("unknown v5 tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+            ?: throw McpToolException("unknown v5 tool '$name'", JsonRpc.INVALID_PARAMS)
         return try {
             mutex.withLock { tool.handler(args, store) }
         } catch (error: IllegalArgumentException) {

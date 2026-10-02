@@ -121,7 +121,14 @@ class PixelSessionStore(
             return session
         }
         if (!create) return null
-        return newSession(id = id)
+        // Get-or-create under the SAME lock newSession registers with: two
+        // concurrent misses each minted a session and the loser's put
+        // DISPLACED the winner, firing onSessionDiscarded for a session that
+        // never died (tier state cleared underneath a live caller). Monitors
+        // are reentrant, so nesting newSession's synchronized is safe.
+        return synchronized(evictionLock) {
+            sessions[id] ?: newSession(id = id)
+        }
     }
 
     /** Stores [project] back into the session and refreshes its LRU stamp. */

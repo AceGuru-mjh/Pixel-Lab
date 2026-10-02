@@ -79,7 +79,7 @@ data class McpPersistence(
  * ## Hosting
  *
  * Standalone dispatcher chained into [McpToolRouter] as tier 6; unknown
- * tool names throw [McpToolException] with `METHOD_NOT_FOUND` so the
+ * tool names throw [McpToolException] with `INVALID_PARAMS` so the
  * router keeps walking.
  *
  * @param lab shared engine facade (engine history powers checkpoints).
@@ -123,11 +123,11 @@ class McpToolRegistryV6(
 
     /**
      * Dispatches one `tools/call`. Throws [McpToolException] with
-     * `METHOD_NOT_FOUND` for unknown names (the tier-chain contract).
+     * `INVALID_PARAMS` for unknown names (the tier-chain contract).
      */
     suspend fun execute(name: String, args: JsonObject, store: PixelSessionStore): JsonObject {
         val tool = tools.firstOrNull { it.name == name }
-            ?: throw McpToolException("unknown v6 tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+            ?: throw McpToolException("unknown v6 tool '$name'", JsonRpc.INVALID_PARAMS)
         return try {
             mutex.withLock { tool.handler(args, store) }
         } catch (error: IllegalArgumentException) {
@@ -749,9 +749,11 @@ class McpToolRegistryV6(
                 // normal undo entry and honors layer locks.
                 lab.engine.applyFrame(project, stamp.cel)
             } else {
-                // Non-active frame: a project-level cel swap (the engine's
-                // applyFrame only addresses the active frame).
-                project.withCel(project.activeLayerId, frameIndex, stamp.cel)
+                // Non-active frame: the engine's cel-level route — same undo
+                // history, same lock enforcement (the old project.withCel
+                // shortcut neither checked the layer lock nor recorded any
+                // undoable transition, violating both engine invariants).
+                lab.engine.applyCel(project, project.activeLayerId, frameIndex, stamp.cel)
             }
             store.update(session.id, next)
             jsonobj {

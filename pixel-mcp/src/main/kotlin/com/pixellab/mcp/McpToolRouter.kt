@@ -22,7 +22,7 @@ import kotlinx.coroutines.withTimeout
  * from every MCP client. This router closes that gap.
  *
  * Dispatch order is v1 → v2 → v3 → v4 → v5 → v6: each registry answers
- * unknown names with [McpToolException] carrying [JsonRpc.METHOD_NOT_FOUND],
+ * unknown names with [McpToolException] carrying [JsonRpc.INVALID_PARAMS],
  * which the router treats as "not in this tier, keep walking". Any other
  * failure — parameter errors (`-32602`), tool crashes — is re-thrown
  * immediately so the tier that owns the name reports the real error, never
@@ -121,13 +121,15 @@ class McpToolRouter(lab: PixelLab, persistence: McpPersistence? = null) {
 
     /**
      * Runs the tool [name] with [params] against [store], walking the tier
-     * chain until one tier owns the name. Unknown tools (no tier claims
-     * them) re-throw the final `METHOD_NOT_FOUND` so the server answers
-     * with the standard `-32601` error, exactly as before.
+     * chain until one tier owns the name. Unknown tools answer with
+     * `INVALID_PARAMS` (-32602): the MCP spec reserves tools/call unknown-
+     * tool failures for invalid params, keeping -32601 for unknown JSON-RPC
+     * *methods* (the server layer already uses it there) — clients could
+     * not tell "no such tool" from "no such method" before.
      */
     suspend fun execute(name: String, params: JsonObject, store: PixelSessionStore): JsonObject {
         val tier = tiers.firstOrNull { name in it.names }
-            ?: throw McpToolException("unknown tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+            ?: throw McpToolException("unknown tool '$name'", JsonRpc.INVALID_PARAMS)
         // Per-tool wall-clock budget under the global router mutex: a
         // wedged or hostile-slow tool used to hold the ONE mutex forever —
         // every subsequent tools/call from every client queued indefinitely

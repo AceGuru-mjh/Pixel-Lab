@@ -74,7 +74,7 @@ import kotlinx.coroutines.sync.withLock
  * exactly: construct `McpToolRegistryV3()` (self-hosting, default lab),
  * then dispatch `tools/call` by trying `v3.execute(name, args, store)`
  * before (or after) the v1/v2 registries — every tier throws
- * [McpToolException] with `JsonRpc.METHOD_NOT_FOUND` for unknown names, so
+ * [McpToolException] with `JsonRpc.INVALID_PARAMS` for unknown names, so
  * a simple try-chain routes any tool. The shared [PixelSessionStore]
  * instance is what ties the tiers together.
  *
@@ -127,10 +127,32 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
 
         /** Tile size of the demo stone Wang tileset. */
         private const val WANG_TILE_SIZE: Int = 4
+
+        /**
+         * Output-pixel ceiling for every raster-producing v3 tool (generators,
+         * tilemap renders, scaled codec exports), aligned with the
+         * canvas_create budget from the security round. The per-tool range
+         * checks (4096², scale 1..64…) alone allowed e.g. 512x512 x scale 64
+         * = a 4.3 GB IntArray attempt: OutOfMemoryError is an Error and
+         * pierces every `catch (Exception)` on the way to the transport.
+         */
+        private const val MAX_OUTPUT_PIXELS: Long = 4_194_304L
     }
 
     /** Serializes tool runs, mirroring v1/v2 (history state is not thread-safe). */
     private val mutex = Mutex()
+
+    /** Raster budget gate: [pixelW] x [pixelH] must stay within [MAX_OUTPUT_PIXELS]. */
+    private fun requireOutputPixels(pixelW: Long, pixelH: Long, what: String) {
+        val pixels = pixelW * pixelH
+        require(pixels <= MAX_OUTPUT_PIXELS) {
+            "$what output ${pixelW}x${pixelH} ($pixels px) exceeds the $MAX_OUTPUT_PIXELS-pixel raster budget"
+        }
+    }
+
+    /** Scaled-export budget gate (Long math: `width * scale` overflows Int). */
+    private fun requireScaledBudget(width: Int, height: Int, scale: Int) =
+        requireOutputPixels(width.toLong() * scale, height.toLong() * scale, "scaled export")
 
     /** V3 tile maps, keyed by session id then map id. */
     private val maps = ConcurrentHashMap<String, MutableMap<String, TileMap>>()
@@ -171,7 +193,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
      * signal tool execution failures (surfaced as MCP `isError`).
      */
     suspend fun execute(name: String, params: JsonObject, store: PixelSessionStore): JsonObject {
-        val tool = byName[name] ?: throw McpToolException("unknown tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+        val tool = byName[name] ?: throw McpToolException("unknown tool '$name'", JsonRpc.INVALID_PARAMS)
         return try {
             mutex.withLock { tool.handler(params, store) }
         } catch (error: IllegalArgumentException) {
@@ -625,6 +647,9 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val scale = params.opt("scale", 1)
             require(frameIndex in project.frames.indices) { "frame_index $frameIndex out of bounds (${project.frameCount} frames)" }
             require(scale in 1..64) { "'scale' must be in [1, 64] (was $scale)" }
+            // Budget gate BEFORE compositing: the check uses the canvas
+            // geometry, so a doomed scale never even pays for the composite.
+            requireScaledBudget(project.width, project.height, scale)
             val frame = project.compositeFrame(frameIndex)
             val target = if (scale == 1) frame else frame.scaledNearest(scale)
             val bytes = QoiCodec.encode(target)
@@ -648,6 +673,9 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val scale = params.opt("scale", 1)
             require(frameIndex in project.frames.indices) { "frame_index $frameIndex out of bounds (${project.frameCount} frames)" }
             require(scale in 1..64) { "'scale' must be in [1, 64] (was $scale)" }
+            // Budget gate BEFORE compositing: the check uses the canvas
+            // geometry, so a doomed scale never even pays for the composite.
+            requireScaledBudget(project.width, project.height, scale)
             val frame = project.compositeFrame(frameIndex)
             val target = if (scale == 1) frame else frame.scaledNearest(scale)
             val bytes = BmpCodec.encode(target)
@@ -718,6 +746,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val height = params.int("height")
             require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
             require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
+            requireOutputPixels(width.toLong(), height.toLong(), "gen_texture")
             val seed = seedParam(params)
             val palette = paletteParam(params)
             val colors = palette.colors
@@ -777,6 +806,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             // within the pixel-core raster budget.
             require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
             require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
+            requireOutputPixels(width.toLong(), height.toLong(), "gen_sprite")
             val seed = seedParam(params)
             val colors = hexColorsParam(params, "colors", min = 1)
             val frame = when (type) {
@@ -858,6 +888,7 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val height = params.int("height")
             require(width in 1..4096) { "'width' must be in [1, 4096] (was $width)" }
             require(height in 1..4096) { "'height' must be in [1, 4096] (was $height)" }
+            requireOutputPixels(width.toLong(), height.toLong(), "gen_noise_field")
             val seed = seedParam(params)
             val tile = params.opt("tile", 0)
             require(tile >= 0) { "'tile' must be >= 0 (was $tile)" }
@@ -1127,6 +1158,15 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             val map = requireMap(session.id, params.string("map_id"))
             val scale = params.opt("scale", 1)
             require(scale in 1..16) { "'scale' must be in [1, 16] (was $scale)" }
+            // Raster budget BEFORE rendering: a 1024x1024-cell map at 8px
+            // tiles rendered a 8192x8192 (268 MB) IntArray that only the
+            // Int.MAX guard saw; scale then multiplied the damage further.
+            requireOutputPixels(
+                map.width.toLong() * map.tileSize,
+                map.height.toLong() * map.tileSize,
+                "tilemap_render",
+            )
+            requireScaledBudget(map.width * map.tileSize, map.height * map.tileSize, scale)
             val rendered = map.render()
             val target = if (scale == 1) rendered else rendered.scaledNearest(scale)
             val bytes = PngCodec.encode(target)

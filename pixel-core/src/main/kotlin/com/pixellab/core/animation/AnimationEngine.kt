@@ -239,6 +239,12 @@ class AnimationEngine(private val config: PixelLabConfig) {
      */
     fun setTag(project: SpriteProject, name: String, startFrame: Int, endFrame: Int): SpriteProject {
         val tag = AnimationTag(name = name, startFrame = startFrame, endFrame = endFrame)
+        // Full span validation: endFrame alone let negative spans and
+        // reversed ranges through into exported Aseprite frameTags.
+        require(startFrame >= 0) { "Tag startFrame $startFrame must be >= 0" }
+        require(startFrame <= endFrame) {
+            "Tag span is reversed: startFrame $startFrame > endFrame $endFrame"
+        }
         require(endFrame < project.frameCount) {
             "Tag endFrame $endFrame out of bounds (${project.frameCount} frames)"
         }

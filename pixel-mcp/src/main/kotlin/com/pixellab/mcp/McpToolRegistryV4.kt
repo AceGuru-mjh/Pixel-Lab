@@ -82,7 +82,7 @@ import kotlinx.coroutines.sync.withLock
  * [PixelMcpServer] wires only the v1 registry; each later tier is a
  * *standalone dispatcher* constructed next to it. Dispatch tries
  * `v4.execute(name, args, store)` in the tier chain; unknown names throw
- * [McpToolException] with `JsonRpc.METHOD_NOT_FOUND` so a simple
+ * [McpToolException] with `JsonRpc.INVALID_PARAMS` so a simple
  * try-chain routes any tool. The shared [PixelSessionStore] ties the
  * tiers together.
  *
@@ -102,6 +102,14 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
     private companion object {
         /** Inline payload ceiling shared by the V4 exporters (matches v1). */
         private const val MAX_INLINE_BYTES: Int = 2 * 1024 * 1024
+
+        /**
+         * Output-pixel ceiling for raster-producing v4 tools, aligned with
+         * the canvas budget from the security round: frame_resample allowed
+         * 8192x8192 = 67M px = a 268 MB IntArray (core's own 268M guard is
+         * far too generous for an Android app's tool budget).
+         */
+        private const val MAX_OUTPUT_PIXELS: Long = 4_194_304L
 
         /** Blob echo ceiling for frame_components (see its cap). */
         private const val MAX_ECHOED_BLOBS: Int = 4096
@@ -124,11 +132,11 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
 
     /**
      * Dispatches one `tools/call`. Throws [McpToolException] with
-     * `METHOD_NOT_FOUND` for unknown names (the tier-chain contract).
+     * `INVALID_PARAMS` for unknown names (the tier-chain contract).
      */
     suspend fun execute(name: String, args: JsonObject, store: PixelSessionStore): JsonObject {
         val tool = tools.firstOrNull { it.name == name }
-            ?: throw McpToolException("unknown v4 tool '$name'", JsonRpc.METHOD_NOT_FOUND)
+            ?: throw McpToolException("unknown v4 tool '$name'", JsonRpc.INVALID_PARAMS)
         return try {
             mutex.withLock { tool.handler(args, store) }
         } catch (error: IllegalArgumentException) {
@@ -175,7 +183,14 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
         val session = sessionOf(params, store)
         val before = session.project
         val cel = requireActiveCel(before)
-        val after = before.withActiveCel(op(cel))
+        // Engine-routed commit (the V2/PixelToolbox route): applyFrame
+        // records an "applyFrame" entry in the ENGINE history keyed by the
+        // project id, so project_undo and checkpoint_rollback cover V4
+        // mutations. The old withActiveCel shortcut bypassed the engine —
+        // its tier-local CommandHistory was write-only (no V4 undo tool
+        // exists), so every V4 op was silently irreversible, AND the lock
+        // check requireWritableActiveLayer never ran.
+        val after = lab.engine.applyFrame(before, op(cel))
         historyFor(session.id).record(V4Command(label), before, after)
         store.update(session.id, after)
         return celSummary(session, after, label)
@@ -633,7 +648,9 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
             // A rolled-back or byte-identical heal leaves the project
             // untouched: no history entry, no store write.
             val changed = report.allApplied && report.frame != cel
-            val after = if (changed) before.withActiveCel(report.frame) else before
+            // Engine-routed commit (same rationale as mutateCel): the heal
+            // must be undoable through project_undo / checkpoint_rollback.
+            val after = if (changed) lab.engine.applyFrame(before, report.frame) else before
             if (changed) {
                 historyFor(session.id).record(V4Command("frame_heal"), before, after)
                 requireNotNull(store.update(session.id, after)) { "session '${session.id}' vanished" }
@@ -740,6 +757,9 @@ class McpToolRegistryV4(private val lab: PixelLab = PixelLab.create()) {
             val height = intParam(params, "height", 0)
             require(width in 1..8192) { "'width' must be in [1, 8192] (was $width)" }
             require(height in 1..8192) { "'height' must be in [1, 8192] (was $height)" }
+            require(width.toLong() * height <= MAX_OUTPUT_PIXELS) {
+                "'width' x 'height' = ${width.toLong() * height} px exceeds the $MAX_OUTPUT_PIXELS-pixel raster budget"
+            }
             val mode = strParam(params, "mode", "nearest")
             val session = sessionOf(params, store)
             val cel = requireActiveCel(session.project)

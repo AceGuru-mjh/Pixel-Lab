@@ -101,7 +101,8 @@ class ModelIntegrityTest {
             p.withFrames(listOf(wrong))
             throw AssertionError("mismatched cel must be rejected")
         } catch (expected: IllegalArgumentException) {
-            assertTrue(expected.message!!.contains("does not match"))
+            // init-style message: "Frame 0 layer 0 cel is 8x8, project is 16x16".
+            assertTrue(expected.message!!.contains("16x16"))
         }
     }
 
@@ -166,10 +167,13 @@ class ModelIntegrityTest {
         // Divergent: `before` (c) does NOT continue from the top's after (b).
         history.record(Cmd("stroke", "brush#1"), c, d)
 
-        // Two entries: undo from d restores c (the divergent before), then a.
-        assertEquals(d, history.undo(d))
-        assertEquals(c, history.undo(c))
-        assertEquals(a, history.undo(a))
+        // Two entries. undo(current) returns the entry's BEFORE state:
+        // undoing from d restores the divergent before c. A second undo
+        // then hits undo()'s divergence guard — current (c) is not the
+        // older entry's after (b), so it answers null instead of stitching
+        // unrelated chains (the documented guard behavior).
+        assertEquals(c, history.undo(d))
+        assertEquals(null, history.undo(c))
     }
 
     @Test

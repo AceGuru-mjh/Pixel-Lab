@@ -16,7 +16,13 @@ namespace pixel_lab {
 
 struct QuantizeOutput {
     std::vector<uint32_t> palette;
+    // Per-pixel palette-mapped copy of the input. Callers that only need the
+    // palette (e.g. the GIF encoder, which re-maps every frame itself after
+    // dithering) set wantMapped = false BEFORE the call: the quantizers then
+    // skip both the initial full-count copy and the final mapping loop,
+    // saving ~2x input-size memory and one full-distance pass.
     std::vector<uint32_t> mapped;
+    bool wantMapped = true;
 };
 
 // ---- Median cut -----------------------------------------------------------

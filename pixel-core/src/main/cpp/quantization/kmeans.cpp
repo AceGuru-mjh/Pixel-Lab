@@ -15,12 +15,22 @@ constexpr uint64_t KMEANS_SEED = 0x504958;
 constexpr int MAX_ITERATIONS = 16;
 constexpr double CONVERGENCE_EPS = 0.1;
 
+// Lloyd iterations cost O(uniqueColors x k x iterations). Without a cap a
+// photo-class input (millions of distinct colors) turns one quantize call
+// into ~1e10 Lab distance evaluations. Colors above this cap are
+// deterministically stride-sampled from the sorted histogram; the dropped
+// colors still map correctly through the exact/nearest fallback below.
+constexpr size_t MAX_LLOYD_COLORS = 1u << 16;
+
 } // namespace
 
 void kmeans(const uint32_t* pixels, size_t count, int targetColors,
             QuantizeOutput& out) {
     out.palette.clear();
-    out.mapped.assign(pixels, pixels + count);
+    out.mapped.clear();
+    if (out.wantMapped) {
+        out.mapped.assign(pixels, pixels + count);
+    }
 
     // Collect opaque pixels (deduplicated with counts so distance sums stay
     // proportional to the original image).
@@ -40,6 +50,21 @@ void kmeans(const uint32_t* pixels, size_t count, int targetColors,
     }
     if (colors.empty() || targetColors <= 0) {
         return;
+    }
+    // Budget guard: keep at most MAX_LLOYD_COLORS distinct colors in the
+    // iteration set (stride sampling of the value-sorted histogram —
+    // deterministic, frequency weighting preserved per kept color).
+    if (colors.size() > MAX_LLOYD_COLORS) {
+        const size_t stride = (colors.size() + MAX_LLOYD_COLORS - 1) / MAX_LLOYD_COLORS;
+        std::vector<uint32_t> keptColors;
+        std::vector<int64_t> keptWeights;
+        keptColors.reserve(colors.size() / stride + 1);
+        for (size_t i = 0; i < colors.size(); i += stride) {
+            keptColors.push_back(colors[i]);
+            keptWeights.push_back(weights[i]);
+        }
+        colors = std::move(keptColors);
+        weights = std::move(keptWeights);
     }
     const size_t k = std::min<size_t>(colors.size(), static_cast<size_t>(targetColors));
 
@@ -163,6 +188,10 @@ void kmeans(const uint32_t* pixels, size_t count, int targetColors,
         out.palette.push_back(labToArgb(centers[order[idx]]));
     }
 
+    if (!out.wantMapped) {
+        return;
+    }
+
     // Exact-match table for speed, then nearest-center mapping.
     std::map<uint32_t, int> exact;
     for (size_t i = 0; i < out.palette.size(); ++i) {
@@ -188,7 +217,21 @@ void kmeans(const uint32_t* pixels, size_t count, int targetColors,
         auto hit = exact.find(pixels[i] & 0xFFFFFF);
         if (hit != exact.end()) {
             out.mapped[i] = (out.palette[static_cast<size_t>(hit->second)] & 0x00FFFFFFu) | (pixels[i] & 0xFF000000u);
+            continue;
         }
+        // Color dropped by the Lloyd sampling cap (or mapped to a discarded
+        // cluster): resolve to the nearest palette entry by squared RGB
+        // distance so `mapped` always holds a palette color.
+        int best = 0;
+        int64_t bestDist = INT64_MAX;
+        for (size_t p = 0; p < out.palette.size(); ++p) {
+            const int64_t d = rgbDistanceSq(pixels[i], out.palette[p]);
+            if (d < bestDist) {
+                bestDist = d;
+                best = static_cast<int>(p);
+            }
+        }
+        out.mapped[i] = (out.palette[static_cast<size_t>(best)] & 0x00FFFFFFu) | (pixels[i] & 0xFF000000u);
     }
 }
 

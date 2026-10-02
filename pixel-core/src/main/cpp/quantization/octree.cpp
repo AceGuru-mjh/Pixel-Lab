@@ -63,7 +63,10 @@ void collectLeaves(const OctreeNode* node, std::vector<const OctreeNode*>& leave
 void octreeQuantize(const uint32_t* pixels, size_t count, int targetColors,
                     QuantizeOutput& out) {
     out.palette.clear();
-    out.mapped.assign(pixels, pixels + count);
+    out.mapped.clear();
+    if (out.wantMapped) {
+        out.mapped.assign(pixels, pixels + count);
+    }
 
     // Node arena with stable addresses (heap nodes, vector only owns).
     std::vector<std::unique_ptr<OctreeNode>> arena;
@@ -153,6 +156,10 @@ void octreeQuantize(const uint32_t* pixels, size_t count, int targetColors,
         const int g = static_cast<int>((leaf->sumG + leaf->count / 2) / leaf->count);
         const int b = static_cast<int>((leaf->sumB + leaf->count / 2) / leaf->count);
         out.palette.push_back(packArgb(0xFF, r, g, b));
+    }
+
+    if (!out.wantMapped) {
+        return;
     }
 
     // Map pixels: exact palette match, else walk to the deepest live leaf and

@@ -46,7 +46,10 @@ int computeRange(const std::vector<ColorCount>& hist, size_t begin, size_t end, 
 void medianCut(const uint32_t* pixels, size_t count, int targetColors,
                QuantizeOutput& out) {
     out.palette.clear();
-    out.mapped.assign(pixels, pixels + count);
+    out.mapped.clear();
+    if (out.wantMapped) {
+        out.mapped.assign(pixels, pixels + count);
+    }
 
     // 24-bit RGB histogram keyed by color value (deterministic order).
     std::map<uint32_t, int64_t> histogram;
@@ -184,6 +187,10 @@ void medianCut(const uint32_t* pixels, size_t count, int targetColors,
             };
             out.palette.push_back(packArgb(0xFF, mean(sumR), mean(sumG), mean(sumB)));
         }
+    }
+
+    if (!out.wantMapped) {
+        return;
     }
 
     // Map every opaque pixel to the nearest palette entry by squared RGB

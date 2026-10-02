@@ -163,13 +163,13 @@ void applyDither(const uint32_t* pixels, int width, int height,
     ErrorBuffer errors(width);
     const bool atkinson = kernel == DitherKernel::ATKINSON;
 
-    // Scratch copy carrying the evolving "current" colors (opaque only).
-    std::vector<uint32_t> work(pixels, pixels + static_cast<size_t>(width) * height);
-
+    // Pixel values are never modified in place (feedback lives in the error
+    // buffer), and each pixel is read before its own output slot is written,
+    // so `out` may alias `pixels` and the input is still consumed correctly.
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             const size_t idx = static_cast<size_t>(y) * width + x;
-            const uint32_t p = work[idx];
+            const uint32_t p = pixels[idx];
             if (isTransparent(p)) {
                 out[idx] = pixels[idx];
                 continue;

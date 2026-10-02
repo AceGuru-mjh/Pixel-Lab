@@ -1162,11 +1162,11 @@ class McpToolRegistryV3(private val lab: PixelLab = PixelLab.create()) {
             // tiles rendered a 8192x8192 (268 MB) IntArray that only the
             // Int.MAX guard saw; scale then multiplied the damage further.
             requireOutputPixels(
-                map.width.toLong() * map.tileSize,
-                map.height.toLong() * map.tileSize,
+                map.width.toLong() * map.tileset.tileSize,
+                map.height.toLong() * map.tileset.tileSize,
                 "tilemap_render",
             )
-            requireScaledBudget(map.width * map.tileSize, map.height * map.tileSize, scale)
+            requireScaledBudget(map.width * map.tileset.tileSize, map.height * map.tileset.tileSize, scale)
             val rendered = map.render()
             val target = if (scale == 1) rendered else rendered.scaledNearest(scale)
             val bytes = PngCodec.encode(target)

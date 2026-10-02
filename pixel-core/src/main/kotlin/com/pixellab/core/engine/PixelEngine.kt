@@ -204,7 +204,9 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
         if (x < 0 || y < 0 || x >= project.width || y >= project.height) return project
         val base = project.activeCel() ?: PixelFrame.blank(project.width, project.height)
         val pixels = floodFillDispatch(base.pixels, project.width, project.height, x, y, argb, tolerance)
-        val next = if (pixels === base.pixels) base else PixelFrame.of(project.width, project.height, pixels)
+        // adopt: dispatch output is freshly allocated (native scratch copy
+        // or Kotlin fill result) — no defensive copy needed on this path.
+        val next = if (pixels === base.pixels) base else PixelFrame.adopt(project.width, project.height, pixels)
         if (next == base) return project
         return commit(project, project.withActiveCel(next), "fill")
     }
@@ -628,7 +630,7 @@ class PixelEngine(private val config: com.pixellab.core.PixelLabConfig) {
                 out[i] = value
             }
         }
-        return if (changed) PixelFrame.of(cel.width, cel.height, out) else cel
+        return if (changed) PixelFrame.adopt(cel.width, cel.height, out) else cel
     }
 
     /**

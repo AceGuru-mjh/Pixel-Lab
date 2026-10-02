@@ -160,6 +160,19 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
             if (!dir.exists() && !dir.mkdirs()) {
                 throw IOException("cannot create project directory ${dir.absolutePath}")
             }
+            // Sanitization-collision guard: distinct raw ids can map to the
+            // same directory ("a:b" and "a;b" both sanitize to "a_b"). The
+            // sweep below would then DELETE the sibling's document — silent
+            // data loss. When the directory already holds a document whose
+            // sidecar declares a different project id, refuse instead.
+            val foreignId = dir.listFiles { f -> f.name.endsWith(DOC_SUFFIX) }
+                ?.mapNotNull { doc -> sidecarProjectId(File(doc.path + META_SUFFIX)) }
+                ?.firstOrNull { it != project.id }
+            if (foreignId != null) {
+                throw IllegalArgumentException(
+                    "project id '${project.id}' collides with '$foreignId' after directory-name sanitization; use a distinct id"
+                )
+            }
             val document = File(dir, "${sanitize(project.name, "project")}.pixellab.json")
 
             // 1. the document (atomic rename).
@@ -543,6 +556,17 @@ class ProjectStore(private val root: File, private val maxCache: Int = 16) {
             if (c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '.' || c == '_' || c == '-') c else '_'
         }.joinToString("").trim('.')
         return cleaned.ifBlank { fallback }
+    }
+
+    /** Reads `projectId` from a sidecar meta file; null when absent/unreadable. */
+    private fun sidecarProjectId(metaFile: File): String? {
+        return try {
+            val text = metaFile.readText()
+            val m = Regex("\"projectId\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(text)
+            m?.groupValues?.get(1)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** Depth-first delete (java.io has no recursive delete). */

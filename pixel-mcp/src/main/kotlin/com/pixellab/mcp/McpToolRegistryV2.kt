@@ -501,7 +501,9 @@ class McpToolRegistryV2(private val lab: PixelLab) {
             "color" to "string", "thickness" to "integer",
             required = listOf("session_id", "x0", "y0", "x1", "y1", "color")) { params, store ->
             val thickness = params.opt("thickness", 1)
-            require(thickness in 1..64) { "'thickness' must be in [1, 64] (was $thickness)" }
+            // 1..16 mirrors GeometryShapes.thickPolyline's engine cap; the old
+            // 1..64 range passed validation and then threw inside the engine.
+            require(thickness in 1..16) { "'thickness' must be in [1, 16] (was $thickness)" }
             val x0 = params.int("x0")
             val y0 = params.int("y0")
             val x1 = params.int("x1")

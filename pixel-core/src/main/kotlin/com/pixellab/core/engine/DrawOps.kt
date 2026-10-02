@@ -133,11 +133,21 @@ object DrawOps {
      * every corner exactly once. Degenerate 1-wide/1-tall boxes emit the
      * single column/row.
      *
-     * @throws IllegalArgumentException if [w] or [h] is below 1.
+     * @throws IllegalArgumentException if [w] or [h] is below 1, or the
+     *   materialized point count (area when filled, perimeter when outlined)
+     *   exceeds [MAX_SHAPE_AREA].
      */
     fun rect(x: Int, y: Int, w: Int, h: Int, filled: Boolean): List<PixelPoint> {
         require(w >= 1) { "rect width must be >= 1 (was $w)" }
         require(h >= 1) { "rect height must be >= 1 (was $h)" }
+        // Shape budget BEFORE materializing anything (mirrors circle/ellipse):
+        // a filled rect materializes w*h points, an outline ~2*(w+h). Without
+        // this cap draw_rect(0, 0, 100000, 100000) tried to allocate 10^10
+        // PixelPoints — the same OOM primitive the circle/ellipse caps closed.
+        val span = if (filled) w.toLong() * h.toLong() else 2L * (w.toLong() + h.toLong())
+        require(span <= MAX_SHAPE_AREA) {
+            "rect ${if (filled) "area $span" else "perimeter $span"} exceeds the $MAX_SHAPE_AREA point budget (${w}x${h}); draw in tiles instead"
+        }
         val out = ArrayList<PixelPoint>()
         if (filled) {
             val firstColumn = maxOf(x, 0)

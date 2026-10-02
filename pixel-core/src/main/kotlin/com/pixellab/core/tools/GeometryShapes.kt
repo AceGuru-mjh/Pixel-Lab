@@ -117,12 +117,20 @@ object GeometryShapes {
      * sorted along the walk.
      *
      * @throws IllegalArgumentException when `w` or `h` is below 1,
-     *   [cornerRadius] is negative or exceeds `min(w, h) / 2`.
+     *   [cornerRadius] is negative or exceeds `min(w, h) / 2`, or the
+     *   boundary perimeter exceeds [DrawOps.MAX_SHAPE_AREA].
      */
     fun roundedRect(x: Int, y: Int, w: Int, h: Int, cornerRadius: Int): List<PixelPoint> {
         require(w >= 1) { "roundedRect width must be >= 1 (was $w)" }
         require(h >= 1) { "roundedRect height must be >= 1 (was $h)" }
         require(cornerRadius >= 0) { "cornerRadius must be >= 0 (was $cornerRadius)" }
+        // Boundary budget before any loop runs: the outline walks ~2*(w+h)
+        // points, so unbounded w/h (e.g. 2e9 x 1 via shape_rect) is an OOM
+        // primitive — the same class the DrawOps rect/circle caps close.
+        val perimeter = 2L * (w.toLong() + h.toLong())
+        require(perimeter <= com.pixellab.core.engine.DrawOps.MAX_SHAPE_AREA) {
+            "roundedRect perimeter $perimeter exceeds the ${com.pixellab.core.engine.DrawOps.MAX_SHAPE_AREA} point budget (${w}x${h})"
+        }
         val maxRadius = minOf(w, h) / 2
         require(cornerRadius <= maxRadius) {
             "cornerRadius $cornerRadius exceeds the maximum $maxRadius for ${w}x$h}"

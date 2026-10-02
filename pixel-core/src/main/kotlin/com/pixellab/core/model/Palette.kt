@@ -16,15 +16,27 @@ class Palette(
     val id: String,
     /** Human-readable name. */
     val name: String,
-    /** ARGB colors in stable index order. Never empty. */
-    val colors: IntArray,
+    /**
+     * ARGB colors in stable index order. Never empty. The constructor takes
+     * a defensive copy, so the caller's source array may be reused freely.
+     * Reads through this property are shared-internal (hot paths pin it for
+     * native calls); WRITES are unsupported — they would silently corrupt
+     * every project, quantizer table and content-based cache holding this
+     * palette. Use [withColor] / [withoutIndex] / copyColors instead.
+     */
+    colors: IntArray,
     /** Provenance of this palette. */
     val source: PaletteSource,
 ) {
 
+    val colors: IntArray = colors.copyOf()
+
     init {
         require(colors.isNotEmpty()) { "Palette '$id' must contain at least one color" }
     }
+
+    /** Defensive copy of the color set, for callers that need to mutate. */
+    fun copyColors(): IntArray = colors.copyOf()
 
     /** Number of colors. */
     val size: Int get() = colors.size

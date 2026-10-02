@@ -108,6 +108,14 @@ class HttpSseServer(
         /** Read timeout while receiving the request head (ms). */
         private const val HEAD_TIMEOUT_MS: Int = 30_000
 
+        /**
+         * TOTAL wall-clock budget for one request (head + body): soTimeout
+         * bounds each individual read(), so a 1-byte-per-29s drip kept a
+         * handler thread "live" forever (64 drip connections starve the
+         * whole IO pool — slow-loris). The deadline aborts the request.
+         */
+        private const val REQUEST_DEADLINE_MS: Long = 60_000
+
         /** Hard cap on simultaneously registered SSE clients. */
         private const val MAX_SSE_CLIENTS: Int = 32
 
@@ -353,7 +361,18 @@ class HttpSseServer(
             if (++count > MAX_HEADERS) return null
             val separator = line.indexOf(':')
             if (separator <= 0) return null
-            headers[line.substring(0, separator).trim().lowercase()] = line.substring(separator + 1).trim()
+            val key = line.substring(0, separator).trim().lowercase()
+            // Hop-by-hop framing headers may not repeat and may not combine
+            // (RFC 9112 §6.3/§6.1 request smuggling vectors): a plain map
+            // overwrite used to resolve duplicates last-wins silently.
+            if (key == "content-length" || key == "transfer-encoding") {
+                if (headers.containsKey(key) || (key == "content-length" && headers.containsKey("transfer-encoding")) ||
+                    (key == "transfer-encoding" && headers.containsKey("content-length"))
+                ) {
+                    return null
+                }
+            }
+            headers[key] = line.substring(separator + 1).trim()
         }
     }
 
@@ -370,9 +389,12 @@ class HttpSseServer(
         val body: String
         val chunked = headers["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true
         val rawLength = headers["content-length"]
+        // Total request budget: per-read soTimeout alone let a 1-byte drip
+        // hold the handler forever (see REQUEST_DEADLINE_MS).
+        val deadline = System.currentTimeMillis() + REQUEST_DEADLINE_MS
         if (chunked) {
             honorExpect100Continue(socket, headers)
-            body = readChunkedBody(input) ?: run {
+            body = readChunkedBody(input, deadline) ?: run {
                 writeStatus(socket, 400, "{\"error\":\"bad_chunked_body\"}")
                 return
             }
@@ -390,7 +412,7 @@ class HttpSseServer(
                 return
             }
             honorExpect100Continue(socket, headers)
-            body = if (length == 0) "" else readBody(input, length) ?: run {
+            body = if (length == 0) "" else readBody(input, length, deadline) ?: run {
                 writeStatus(socket, 400, "{\"error\":\"bad_request\"}")
                 return
             }
@@ -583,8 +605,8 @@ class HttpSseServer(
      * Malformed UTF-8 fails the body rather than silently decoding to
      * U+FFFD replacement characters.
      */
-    private fun readBody(input: InputStream, length: Int): String? {
-        val raw = readBodyBytes(input, length) ?: return null
+    private fun readBody(input: InputStream, length: Int, deadline: Long = Long.MAX_VALUE): String? {
+        val raw = readBodyBytes(input, length, deadline) ?: return null
         val decoder = StandardCharsets.UTF_8.newDecoder()
             .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
             .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
@@ -601,9 +623,10 @@ class HttpSseServer(
      * zero-size chunk and trailer section. Null on malformed framing or
      * when the reassembled body would exceed [MAX_BODY_BYTES].
      */
-    private fun readChunkedBody(input: InputStream): String? {
+    private fun readChunkedBody(input: InputStream, deadline: Long = Long.MAX_VALUE): String? {
         val out = java.io.ByteArrayOutputStream()
         while (true) {
+            if (System.currentTimeMillis() > deadline) return null
             val sizeLine = readLine(input) ?: return null
             val size = sizeLine.substringBefore(';').trim().toIntOrNull(16) ?: return null
             // Long-domain guard: an Int + Int sum overflows negative for
@@ -622,20 +645,37 @@ class HttpSseServer(
                     if (trailer.isEmpty()) break
                     if (++trailerLines > MAX_TRAILER_LINES) return null
                 }
-                return out.toString("UTF-8")
+                // Strict UTF-8 (identity-body semantics): lenient decoding
+                // turned malformed sequences into U+FFFD replacement chars
+                // that reached the JSON parser as garbage instead of being
+                // rejected at the boundary.
+                val decoder = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                return try {
+                    decoder.decode(java.nio.ByteBuffer.wrap(out.toByteArray())).toString()
+                } catch (error: java.nio.charset.CharacterCodingException) {
+                    null
+                }
             }
-            val chunk = readBodyBytes(input, size) ?: return null
+            val chunk = readBodyBytes(input, size, deadline) ?: return null
             out.write(chunk)
             val crlf = readLine(input) ?: return null
             if (crlf.isNotEmpty()) return null
         }
     }
 
-    /** Reads exactly [length] raw bytes, allocating incrementally; null on early EOF. */
-    private fun readBodyBytes(input: InputStream, length: Int): ByteArray? {
+    /**
+     * Reads exactly [length] raw bytes, allocating incrementally; null on
+     * early EOF or when [deadline] (wall-clock millis) passes mid-read —
+     * the slow-loris guard: each read() restarts the 30s soTimeout, so a
+     * byte-per-29s drip otherwise pinned the handler thread forever.
+     */
+    private fun readBodyBytes(input: InputStream, length: Int, deadline: Long = Long.MAX_VALUE): ByteArray? {
         var bytes = ByteArray(minOf(length, 64 * 1024))
         var offset = 0
         while (offset < length) {
+            if (System.currentTimeMillis() > deadline) return null
             val read = input.read(bytes, offset, bytes.size - offset)
             if (read == -1) return null
             offset += read

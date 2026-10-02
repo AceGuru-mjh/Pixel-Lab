@@ -72,6 +72,13 @@ class PixelSessionStore(
         name: String = DEFAULT_NAME,
         id: String = defaultId(),
     ): SessionState {
+        // Creation must enforce the same id contract as get(): an
+        // over-long or blank id used to register fine and then became
+        // PERMANENTLY unreachable (every later lookup threw).
+        require(id.isNotBlank()) { "session id must not be blank" }
+        require(id.length <= MAX_ID_LENGTH) {
+            "session id must be at most $MAX_ID_LENGTH characters (was ${id.length})"
+        }
         val session = SessionState(
             id = id,
             createdAtMs = System.currentTimeMillis(),

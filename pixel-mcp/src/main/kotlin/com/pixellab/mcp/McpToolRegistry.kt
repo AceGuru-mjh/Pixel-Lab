@@ -33,11 +33,22 @@ import java.util.Base64
 /** Upper bound for a canvas edge accepted from MCP requests (entry guard). */
 private const val MAX_CANVAS_EDGE: Int = 8192
 
+/**
+ * Total-pixel budget for remote-created canvases: 8192x8192 alone is a
+ * 268 MB IntArray per cel (each drawn-on frame clone materializes its own),
+ * so the edge cap is not a memory cap. 4.19M pixels (2048^2) keeps the
+ * interactive pixel-art domain and bounds the multi-frame/cel blow-up.
+ */
+private const val MAX_CANVAS_PIXELS: Long = 4_194_304L
+
 /** Upper bound of one binary payload inlined as base64 by export tools (2 MB). */
 private const val MAX_INLINE_BYTES: Int = 2 * 1024 * 1024
 
 /** Upper bound for point lists accepted by the draw_* tools (use draw_batch beyond). */
 private const val MAX_POINTS_PARAM: Int = 4096
+
+/** Text length accepted by text rendering tools (frame-width explosion guard). */
+private const val MAX_TEXT_CHARS: Int = 4096
 
 /** Upper bound for raw pixel arrays accepted as tool parameters. */
 private const val MAX_PIXEL_INPUT: Int = 4_194_304
@@ -130,6 +141,10 @@ class McpToolRegistry(private val lab: PixelLab) {
     private fun requireSize(width: Int, height: Int) {
         require(width in 1..MAX_CANVAS_EDGE && height in 1..MAX_CANVAS_EDGE) {
             "canvas edges must be in [1, $MAX_CANVAS_EDGE] (was ${width}x${height})"
+        }
+        require(width.toLong() * height <= MAX_CANVAS_PIXELS) {
+            "canvas ${width}x${height} is ${width.toLong() * height} pixels, above the " +
+                "$MAX_CANVAS_PIXELS-pixel budget (draw in tiles or import instead)"
         }
     }
 
@@ -978,8 +993,14 @@ class McpToolRegistry(private val lab: PixelLab) {
             val scale = params.opt("scale", 1)
             require(spacing in 0..64) { "'spacing' must be in [0, 64] (was $spacing)" }
             require(scale in 1..16) { "'scale' must be in [1, 16] (was $scale)" }
+            val text = params.string("text")
+            // Frame-width explosion guard: 100k chars at scale 16 rendered a
+            // ~1.6G-pixel frame (multi-GB IntArray) before anything else ran.
+            require(text.length <= MAX_TEXT_CHARS) {
+                "'text' must be at most $MAX_TEXT_CHARS characters (was ${text.length})"
+            }
             val frame = lab.template.generateText(
-                text = params.string("text"),
+                text = text,
                 color = if (params.has("color")) colorParam(params, "color") else 0xFFFFFFFF.toInt(),
                 font = fontParam(params),
                 spacing = spacing,

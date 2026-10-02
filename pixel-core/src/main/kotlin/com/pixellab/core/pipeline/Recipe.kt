@@ -20,7 +20,11 @@ sealed class RecipeStep {
     /** Nearest-neighbor integer upscale by [factor] (canvas grows `factor`x). */
     data class ScaleStep(val factor: Int) : RecipeStep() {
         init {
-            require(factor >= 1) { "scale factor must be >= 1 (was $factor)" }
+            // 1..16 mirrors every other upscale surface (v2 transform_scale,
+            // v4 exporters): pipeline scale was the only path with no cap —
+            // factor 31 on an 8192-edge frame overflowed the target product
+            // before PixelFrame could reject it.
+            require(factor in 1..16) { "scale factor must be in [1, 16] (was $factor)" }
         }
     }
 
@@ -193,6 +197,12 @@ object RecipeParser {
         }
         val stepsArray = stepsValue
             ?: throw IllegalArgumentException("${rootObject.where()}: missing required 'steps' array")
+        // Step-count ceiling: recipes are linear chains by design; an 8MB
+        // body of thousands of steps multiplied every per-step allocation by
+        // the frame count under the router's single mutex.
+        require(stepsArray.items.size <= 32) {
+            "recipe has ${stepsArray.items.size} steps (max 32)"
+        }
         val steps = ArrayList<RecipeStep>(stepsArray.items.size)
         for ((index, item) in stepsArray.items.withIndex()) {
             val obj = item as? JObject

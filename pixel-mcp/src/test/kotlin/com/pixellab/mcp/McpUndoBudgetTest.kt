@@ -4,6 +4,7 @@ import com.pixellab.core.PixelLab
 import com.pixellab.mcp.json.Json
 import com.pixellab.mcp.json.JsonObject
 import com.pixellab.mcp.json.JsonString
+import com.pixellab.mcp.json.jsonobj
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

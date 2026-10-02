@@ -29,6 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pixellab.core.model.PixelPoint
@@ -423,6 +428,13 @@ private fun SymmetrySelector(
                     .clickable {
                         state.symmetry = symmetry
                         onSymmetryChange(symmetry)
+                    }
+                    // TalkBack previously read these four icon buttons as
+                    // unnamed graphics: announce mode + selection state.
+                    .semantics {
+                        contentDescription = "Symmetry " + symmetry.name.lowercase().replace('_', ' ')
+                        role = Role.Button
+                        selected = state.symmetry == symmetry
                     },
                 contentAlignment = Alignment.Center,
             ) {

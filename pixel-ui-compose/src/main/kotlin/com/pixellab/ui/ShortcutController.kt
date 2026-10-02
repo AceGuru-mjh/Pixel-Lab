@@ -1,9 +1,14 @@
 package com.pixellab.ui
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -95,8 +100,6 @@ enum class ShortcutAction {
     DELETE,
     /** Select the whole canvas as the selection rectangle. */
     SELECT_ALL,
-    /** Space is held — canvas drags pan instead of drawing. */
-    PAN_MODIFIER,
 }
 
 /**
@@ -272,8 +275,21 @@ fun ShortcutLayer(
 ) {
     val currentOnAction = rememberUpdatedState(onAction)
     val currentOnShortcut = rememberUpdatedState(onShortcut)
+    // A focusable root: onKeyEvent only receives events that bubble up from
+    // a FOCUSED descendant — right after opening the editor nothing has
+    // focus, so B/E/G/Z/1-9 were dead until the user first tapped a chip.
+    // The layer grabs focus on entry and re-grabs it after any
+    // clearFocus() (e.g. committing a layer rename) so shortcuts always
+    // have a bubble path.
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
     Box(
-        modifier = modifier.onKeyEvent { event: KeyEvent ->
+        modifier = modifier
+            .focusRequester(focusRequester)
+            .focusable()
+            .onKeyEvent { event: KeyEvent ->
             // Dispatch on the initial press ONLY: Compose delivers KeyDown,
             // KeyRepeat AND KeyUp to onKeyEvent, so without this gate every
             // shortcut double-fired (Ctrl+Z undid TWO steps, X swapped

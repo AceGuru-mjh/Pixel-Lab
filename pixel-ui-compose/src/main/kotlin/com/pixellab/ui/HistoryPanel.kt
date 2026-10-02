@@ -138,7 +138,10 @@ fun HistoryPanel(
                         onClick = { onJumpTo(0) },
                     )
                 }
-                items(newestFirst.size, key = { i -> i }) { i ->
+                // Stable key = the entry's serial position from the OLDEST
+                // end: new entries unshift at the top, so every older entry
+                // keeps its key (positional keys shifted the whole list).
+                items(newestFirst.size, key = { i -> newestFirst.size - 1 - i }) { i ->
                     val entry = newestFirst[i]
                     val depth = entries.size - i
                     HistoryRow(

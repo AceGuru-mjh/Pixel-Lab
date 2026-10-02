@@ -22,8 +22,8 @@ private const val StoreDirName: String = "pixel-lab"
  *
  * This is the **primary integration path** for hosts: any activity of your
  * own can embed `AppRoot(ProjectStore(File(filesDir, "pixel-lab")))` and
- * gains the full gallery + PR10 editor experience without touching
- * [MainActivity] (which stays the frozen v1 demo). [EditorActivity] in
+ * gains the full gallery + editor experience. [MainActivity] additionally
+ * links here from its "Full editor / MCP" entry. [EditorActivity] in
  * this package demonstrates the alternative path — a dedicated activity
  * that hosts nothing but [AppRoot].
  *

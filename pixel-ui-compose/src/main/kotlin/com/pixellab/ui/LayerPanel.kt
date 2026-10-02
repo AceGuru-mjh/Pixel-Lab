@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import com.pixellab.core.model.Layer
 import com.pixellab.core.model.SpriteProject
@@ -225,7 +226,13 @@ private fun LayerRow(
                         if (nameDraft.isNotBlank() && nameDraft != layer.name) {
                             onRenameLayer(layer.id, nameDraft.trim())
                         }
-                        focusManager.clearFocus()
+                        // Hand focus back to the ANCESTOR (the editor's
+                        // focusable shortcut root): clearFocus() empties the
+                        // whole focus tree, and key events stopped bubbling
+                        // until the user tapped something again.
+                        if (!focusManager.moveFocus(FocusDirection.Exit)) {
+                            focusManager.clearFocus()
+                        }
                     },
                 ),
             )

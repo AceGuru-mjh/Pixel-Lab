@@ -6,7 +6,8 @@
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -14,14 +15,19 @@
         </activity>
         <!-- configChanges: the editor (EditorScreen via AppRoot) and the MCP
              panel keep their Compose state across rotation instead of being
-             recreated with a re-read from disk. -->
+             recreated with a re-read from disk. windowSoftInputMode=
+             adjustResize: pre-35 devices resize for the IME so the editor's
+             imePadding can keep text fields visible (35+ is edge-to-edge
+             by default and Compose insets handle it). -->
         <activity
             android:name=".EditorActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize"
             android:exported="false" />
         <activity
             android:name=".McpServerActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize"
             android:exported="false" />
     </application>
 </manifest>

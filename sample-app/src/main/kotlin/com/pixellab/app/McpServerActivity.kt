@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,7 +38,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pixellab.core.store.SlotStore
+import com.pixellab.core.store.SlotSummary
 import com.pixellab.mcp.PixelMcpServer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -164,9 +168,15 @@ fun McpServerPanel(
         running = serverAccessor() != null
     }
 
-    val slots = remember(persistenceRoot, running) {
-        if (running || persistenceRoot.isDirectory) {
-            runCatching { SlotStore(persistenceRoot).list() }.getOrDefault(emptyList())
+    // Slot listing moved OFF the main thread: the remember block ran
+    // directory scans + JSON header reads on the UI thread (StrictMode
+    // disk-read violation, jank on cold start with many slots).
+    var slots by remember { mutableStateOf<List<SlotSummary>>(emptyList()) }
+    LaunchedEffect(persistenceRoot, running) {
+        slots = if (running || persistenceRoot.isDirectory) {
+            withContext(Dispatchers.IO) {
+                runCatching { SlotStore(persistenceRoot).list() }.getOrDefault(emptyList())
+            }
         } else {
             emptyList()
         }

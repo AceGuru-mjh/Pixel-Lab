@@ -153,16 +153,11 @@ val LocalPixelTheme: androidx.compose.runtime.ProvidableCompositionLocal<PixelTh
 /**
  * Built-in theme presets.
  *
- * Note on [LocalPixelTheme]: the compile-only stub family models
- * `staticCompositionLocalOf(default)` as a *value* parameter (real Compose
- * takes a `() -> T` factory) and provides no `CompositionLocalProvider`
- * composable nor a `.current` accessor, so the PR10 components thread
- * [PixelTheme] through explicit parameters. `LocalPixelTheme` is still
- * declared with the real Compose type
- * (`ProvidableCompositionLocal<PixelTheme>`) so hosts running against the
- * real library may install it with `CompositionLocalProvider` and read
- * `LocalPixelTheme.current` — the explicit parameter remains the source of
- * truth for the suite.
+ * Note on [LocalPixelTheme]: the suite compiles against the real Compose
+ * BOM, so hosts may install a theme with `CompositionLocalProvider` and
+ * components read `LocalPixelTheme.current` as a default. The explicit
+ * [PixelTheme] parameter remains the source of truth when a host wants
+ * per-surface overrides (e.g. the canvas chrome vs. panel chrome).
  */
 object PixelThemes {
 

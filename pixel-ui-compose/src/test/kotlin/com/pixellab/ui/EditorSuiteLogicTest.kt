@@ -297,6 +297,15 @@ class EditorSuiteLogicTest {
         assertEquals(ShortcutAction.ZOOM_OUT, map.find("Minus"))
     }
 
+    @Test
+    fun spaceIsUnboundSoUiActivationKeepsWorking() {
+        // Space is a UI activation key (buttons, sliders) and a text-field
+        // keystroke: binding it globally swallowed those interactions (the
+        // removed PAN_MODIFIER shortcut). This pins the unbound state.
+        val map = ShortcutMap()
+        assertEquals(null, map.find("Space"))
+    }
+
     // ---- Timeline frame operations ---------------------------------------------
 
     @Test

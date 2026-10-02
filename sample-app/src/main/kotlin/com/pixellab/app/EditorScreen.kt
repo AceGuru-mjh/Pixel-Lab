@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -30,11 +33,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.pixellab.core.PixelLab
 import com.pixellab.core.model.SpriteProject
 import com.pixellab.core.store.ProjectStore
 import com.pixellab.ui.PixelEditorScaffold
@@ -108,6 +113,7 @@ fun EditorScreen(
     var confirmLeave by remember(projectId) { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // The system back key must respect the unsaved-changes guard: without
     // this handler, back finished the activity directly and silently
@@ -168,14 +174,45 @@ fun EditorScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    /** Persists the current project and clears the dirty flag. */
+    /** Persists the current project off the main thread and clears the dirty flag. */
     fun saveCurrent(current: SpriteProject) {
-        try {
-            projectStore.save(current)
-            dirty = false
-            scope.launch { snackbarHostState.showSnackbar("Saved ${current.name}") }
-        } catch (error: Exception) {
-            scope.launch { snackbarHostState.showSnackbar("Save failed: ${error.message}") }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { projectStore.save(current) }
+                dirty = false
+                snackbarHostState.showSnackbar("Saved ${current.name}")
+            } catch (error: Exception) {
+                snackbarHostState.showSnackbar("Save failed: ${error.message}")
+            }
+        }
+    }
+
+    /** Shared library facade for exports (the exporter runs on Dispatchers.IO). */
+    val lab = remember { PixelLab.create() }
+    var exportMenuOpen by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
+
+    /** Exports the current document in [kind] format into the external dir. */
+    fun requestExport(kind: ExportKind, current: SpriteProject) {
+        if (exporting) return
+        exportMenuOpen = false
+        val dir = context.getExternalFilesDir(null)
+        if (dir == null) {
+            scope.launch { snackbarHostState.showSnackbar("External storage unavailable") }
+            return
+        }
+        exporting = true
+        scope.launch {
+            try {
+                val result = doExport(kind, lab, current, dir)
+                snackbarHostState.showSnackbar(
+                    "${kind.label} saved: ${result.file.absolutePath} (${result.byteCount} B)",
+                )
+            } catch (error: Exception) {
+                snackbarHostState.showSnackbar("Export failed: ${error.message}")
+            } finally {
+                exporting = false
+            }
         }
     }
 
@@ -220,12 +257,39 @@ fun EditorScreen(
                                 fontSize = 16.sp,
                             )
                             Spacer(modifier = Modifier.weight(1f))
+                            // Export entry: gallery documents previously had
+                            // NO export path at all — only the v1 demo's
+                            // in-memory document could export. Same menu and
+                            // doExport pipeline as the demo screen.
+                            Box {
+                                TextButton(
+                                    onClick = { exportMenuOpen = true },
+                                    enabled = !exporting,
+                                ) {
+                                    Text(text = "Export")
+                                }
+                                DropdownMenu(
+                                    expanded = exportMenuOpen,
+                                    onDismissRequest = { exportMenuOpen = false },
+                                ) {
+                                    for (kind in ExportKind.entries) {
+                                        DropdownMenuItem(
+                                            text = { Text(text = kind.label) },
+                                            onClick = { requestExport(kind, loaded) },
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(BarSpacing))
                             Button(
                                 onClick = { saveCurrent(loaded) },
                                 enabled = dirty,
                             ) {
                                 Text(text = if (dirty) "Save" else "Saved")
                             }
+                        }
+                        if (exporting) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
                         PixelEditorScaffold(
                             project = loaded,
@@ -234,6 +298,7 @@ fun EditorScreen(
                                 dirty = true
                             },
                             onSave = { saveCurrent(loaded) },
+                            onExport = { exportMenuOpen = true },
                             modifier = Modifier
                                 .fillMaxSize()
                                 .weight(1f),

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +19,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -621,17 +623,31 @@ fun PixelEditorScaffold(
                         timeline()
                         status()
                     }
-                    Column(modifier = Modifier.width(SidePanelWidth)) { inspector() }
+                    // imePadding: the inspector hosts text fields (layer
+                    // rename, timeline duration) that the soft keyboard
+                    // otherwise covers on edge-to-edge (targetSdk 35).
+                    // key(project.id): the scaffold's own state is re-keyed
+                    // per document, but the panels' PRIVATE remembers (palette
+                    // draft colors, sort snapshot, selection) are not — a
+                    // same-id palette swap bled document A's snapshot into
+                    // document B. Re-keying the subtree resets all of them.
+                    key(liveProject.id) {
+                        Column(modifier = Modifier.width(SidePanelWidth).imePadding()) { inspector() }
+                    }
                 }
             } else {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                // imePadding: input fields mid-column (timeline duration,
+                // inspector) must clear the IME instead of hiding under it.
+                // key(liveProject.id): resets all nested panel state per
+                // document (see the wide branch).
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding()) {
                     toolRail()
                     transportBar()
                     canvas(Modifier.heightIn(min = CompactCanvasMinHeight))
                     preview()
                     timeline()
                     status()
-                    inspector()
+                    key(liveProject.id) { inspector() }
                 }
             }
         }
@@ -675,8 +691,6 @@ private fun jumpHistoryTo(session: EditorSession, depth: Int) {
 }
 
 /** Shifts a half-open selection rect by whole pixels. */
-private fun Rect.nudged(dx: Float, dy: Float): Rect = Rect(left + dx, top + dy, right + dx, bottom + dy)
-
 /**
  * Nudges the selection with edge clamping: the rect is shifted and then
  * pulled back inside the `width x height` grid so the whole marquee stays

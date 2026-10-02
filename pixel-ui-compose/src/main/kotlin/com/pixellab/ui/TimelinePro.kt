@@ -67,9 +67,6 @@ private val FrameCardCorner = 4.dp
 private const val MinFps = 1
 private const val MaxFps = 24
 
-/** Slider steps between fps 1 and 24. */
-private const val FpsSteps = 22
-
 /** Longest legal per-frame duration override, ms. */
 private const val MaxDurationMs = 60_000
 
@@ -370,6 +367,8 @@ fun TimelinePro(
                 Text(text = "FPS", fontSize = 11.sp, color = theme.textSecondary)
                 IconButton(
                     onClick = { onFpsChange((project.fps - 1).coerceAtLeast(MinFps)) },
+                    // TalkBack read the bare glyph; label the action instead.
+                    modifier = Modifier.semantics { contentDescription = "Decrease playback speed" },
                 ) {
                     Text(text = "−", fontSize = 16.sp, color = theme.textPrimary)
                 }
@@ -380,6 +379,7 @@ fun TimelinePro(
                 )
                 IconButton(
                     onClick = { onFpsChange((project.fps + 1).coerceAtMost(MaxFps)) },
+                    modifier = Modifier.semantics { contentDescription = "Increase playback speed" },
                 ) {
                     Text(text = "+", fontSize = 16.sp, color = theme.textPrimary)
                 }
@@ -451,7 +451,13 @@ fun TimelinePro(
         // ---- frame strip ----------------------------------------------------
         Box(modifier = Modifier.heightIn(min = FrameCardWidth + 8.dp)) {
             LazyRow {
-                items(project.frames.size) { index ->
+                // Stable keys: deleting/reordering frames reuses the right
+                // cards (positional keys recomposed EVERY visible card and
+                // lost scroll anchoring).
+                items(
+                    count = project.frames.size,
+                    key = { index -> project.frames[index].id },
+                ) { index ->
                     FrameCard(
                         theme = theme,
                         project = project,

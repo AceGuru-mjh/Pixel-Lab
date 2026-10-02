@@ -102,8 +102,8 @@ class EditorSuiteLogicTest {
         val cell = CanvasState.BaseCellSize * state.zoom
         val frame = 100 * cell
         assertTrue(
-            "frame $frame must stay within viewport 2296 (zoom ${state.zoom})",
             frame <= 2296f,
+            "frame $frame must stay within viewport 2296 (zoom ${state.zoom})",
         )
     }
 

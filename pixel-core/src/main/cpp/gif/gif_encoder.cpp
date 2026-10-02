@@ -2,10 +2,18 @@
 #include "lzw.h"
 
 #include <cstring>
+#include <unordered_map>
 
 namespace pixel_lab {
 
 namespace {
+
+// Quantizer input cap. Feeding the concatenated animation into the quantizer
+// costs one uint32 per pixel of native memory; 512x512x200 frames used to
+// peak at ~210 MB just for that buffer (plus an equal-size `mapped` copy the
+// GIF path never read). Animations above this cap are stride-sampled — the
+// color histogram stays statistically faithful and deterministic.
+constexpr size_t MAX_QUANTIZE_SAMPLES = 1u << 22;
 
 void putU16(std::vector<uint8_t>& out, uint16_t v) {
     out.push_back(static_cast<uint8_t>(v & 0xFF));
@@ -27,8 +35,12 @@ void putBytes(std::vector<uint8_t>& out, const char* s, size_t n) {
 
 // Maps opaque pixels onto the palette (exact match cache then nearest RGB);
 // transparent pixels map to index 0. Ties resolve to the lowest index.
+// `exact` and `nearest` cache resolutions ACROSS frames: pixel art repeats
+// colors heavily, so the per-pixel linear palette scan runs at most once
+// per distinct color instead of once per pixel.
 std::vector<uint8_t> indexFrame(const uint32_t* pixels, size_t count,
-                                const std::vector<uint32_t>& palette) {
+                                const std::vector<uint32_t>& palette,
+                                std::unordered_map<uint32_t, uint8_t>& nearest) {
     std::vector<uint8_t> indices(count);
     for (size_t i = 0; i < count; ++i) {
         if (isTransparent(pixels[i])) {
@@ -36,6 +48,11 @@ std::vector<uint8_t> indexFrame(const uint32_t* pixels, size_t count,
             continue;
         }
         const uint32_t rgb = pixels[i] & 0xFFFFFF;
+        auto cached = nearest.find(rgb);
+        if (cached != nearest.end()) {
+            indices[i] = cached->second;
+            continue;
+        }
         // Exact match first (linear scan is fine: <=256 palette entries).
         int found = -1;
         for (size_t p = 1; p < palette.size(); ++p) {
@@ -44,20 +61,23 @@ std::vector<uint8_t> indexFrame(const uint32_t* pixels, size_t count,
                 break;
             }
         }
+        uint8_t slot;
         if (found >= 0) {
-            indices[i] = static_cast<uint8_t>(found);
-            continue;
-        }
-        size_t best = 1;
-        int64_t bestDist = INT64_MAX;
-        for (size_t p = 1; p < palette.size(); ++p) {
-            const int64_t d = rgbDistanceSq(pixels[i], palette[p]);
-            if (d < bestDist) {
-                bestDist = d;
-                best = p;
+            slot = static_cast<uint8_t>(found);
+        } else {
+            size_t best = 1;
+            int64_t bestDist = INT64_MAX;
+            for (size_t p = 1; p < palette.size(); ++p) {
+                const int64_t d = rgbDistanceSq(pixels[i], palette[p]);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = p;
+                }
             }
+            slot = static_cast<uint8_t>(best);
         }
-        indices[i] = static_cast<uint8_t>(best);
+        nearest.emplace(rgb, slot);
+        indices[i] = slot;
     }
     return indices;
 }
@@ -83,13 +103,35 @@ bool encodeGif(int width, int height,
         }
     }
 
-    // ---- Palette: merge all frames, extract <=255 colors --------------------
+    // ---- Palette: sample all frames, extract <=255 colors -------------------
+    // Feed the quantizer a BOUNDED, representative sample: full concatenation
+    // costs totalPixels uint32 words of memory (210 MB for 512x512x200); the
+    // stride sample keeps the histogram faithful while capping the buffer.
+    const size_t totalPixels = pixelCount * frames.size();
     std::vector<uint32_t> merged;
-    merged.reserve(pixelCount * frames.size());
-    for (size_t f = 0; f < frames.size(); ++f) {
-        merged.insert(merged.end(), frames[f], frames[f] + pixelCount);
+    if (totalPixels <= MAX_QUANTIZE_SAMPLES) {
+        merged.reserve(totalPixels);
+        for (size_t f = 0; f < frames.size(); ++f) {
+            merged.insert(merged.end(), frames[f], frames[f] + pixelCount);
+        }
+    } else {
+        const size_t stride = (totalPixels + MAX_QUANTIZE_SAMPLES - 1) / MAX_QUANTIZE_SAMPLES;
+        merged.reserve(totalPixels / stride + 1);
+        size_t global = 0;
+        for (size_t f = 0; f < frames.size(); ++f) {
+            for (size_t i = 0; i < pixelCount; ++i) {
+                if (global % stride == 0) {
+                    merged.push_back(frames[f][i]);
+                }
+                ++global;
+            }
+        }
     }
     QuantizeOutput quantized;
+    // The GIF path only consumes `quantized.palette`: every frame is
+    // re-mapped individually after dithering. Skipping `mapped` avoids the
+    // full-sample copy AND the per-pixel nearest pass inside the quantizer.
+    quantized.wantMapped = false;
     switch (quantAlgorithmId) {
         case 1:
             kmeans(merged.data(), merged.size(), 255, quantized);
@@ -145,22 +187,29 @@ bool encodeGif(int width, int height,
     out.push_back(0x00);
 
     // ---- Frames -----------------------------------------------------------------
+    // Dither palette = REAL colors only (slots 1..N). Handing the transparent
+    // slot 0 (packed as opaque black) to applyDither made dark opaque pixels
+    // snap to a phantom black and corrupted the error-diffusion feedback —
+    // indexFrame never maps to slot 0 for opaque pixels, so dithering against
+    // it produces colors the indexed output cannot express.
+    std::vector<uint32_t> flatPalette(palette.size() - 1);
+    for (size_t p = 1; p < palette.size(); ++p) {
+        flatPalette[p - 1] = packArgb(0xFF, redOf(palette[p]), greenOf(palette[p]), blueOf(palette[p]));
+    }
     std::vector<uint32_t> dithered(pixelCount);
+    std::unordered_map<uint32_t, uint8_t> slotCache;
+    slotCache.reserve(512);
     for (size_t f = 0; f < frames.size(); ++f) {
         const uint32_t* src = frames[f];
 
         // Dither before palette snapping when requested (kernel NONE = plain
         // nearest-neighbor mapping).
-        std::vector<uint32_t> flatPalette(palette.size());
-        for (size_t p = 0; p < palette.size(); ++p) {
-            flatPalette[p] = packArgb(0xFF, redOf(palette[p]), greenOf(palette[p]), blueOf(palette[p]));
-        }
         const DitherKernel effectiveKernel =
             static_cast<DitherKernel>(ditherId < 0 ? 0 : (ditherId > 6 ? 6 : ditherId));
         applyDither(src, width, height, flatPalette.data(), flatPalette.size(),
                     effectiveKernel, 1.0f, dithered.data());
 
-        const std::vector<uint8_t> indices = indexFrame(dithered.data(), pixelCount, palette);
+        const std::vector<uint8_t> indices = indexFrame(dithered.data(), pixelCount, palette, slotCache);
 
         // Graphic control extension: disposal 2, transparent flag, delay in
         // centiseconds (>= 2 to dodge renderer reinterpretation).

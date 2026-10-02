@@ -7,6 +7,8 @@
 
 #include <jni.h>
 #include <cstdint>
+#include <exception>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -43,8 +45,8 @@ public:
     ScopedIntArray& operator=(const ScopedIntArray&) = delete;
 
     ScopedIntArray(ScopedIntArray&& other) noexcept
-        : env_(other.env_), array_(other.array_), elements_(other.elements_),
-          size_(other.size_), copyBack_(other.copyBack_), failed_(other.failed_) {
+        : env_(other.env_), array_(other.array_), copyBack_(other.copyBack_),
+          elements_(other.elements_), size_(other.size_), failed_(other.failed_) {
         other.elements_ = nullptr;
         other.array_ = nullptr;
     }
@@ -56,9 +58,9 @@ public:
 private:
     JNIEnv* env_;
     jintArray array_ = nullptr;
+    bool copyBack_ = true;
     int32_t* elements_ = nullptr;
     jsize size_ = 0;
-    bool copyBack_ = true;
     bool failed_ = false;
 };
 
@@ -147,6 +149,58 @@ inline void throwIAE(JNIEnv* env, const char* message) {
 inline void throwIAE(JNIEnv* env, const std::string& message) {
     throwIAE(env, message.c_str());
 }
+
+// Translates a pending C++ exception into a JVM exception. Called from
+// JNI_CATCH guards only (inside a catch block). A std::bad_alloc escaping a
+// JNI entry point otherwise crosses the language boundary and terminates the
+// whole process — the Kotlin-side catch (Exception) fallback never sees it.
+// Returns true when a JVM exception is now pending.
+inline bool translatePendingCppException(JNIEnv* env) noexcept {
+    try {
+        throw;  // rethrow the in-flight exception
+    } catch (const std::bad_alloc&) {
+        jclass cls = env->FindClass("java/lang/OutOfMemoryError");
+        if (cls != nullptr) {
+            env->ThrowNew(cls, "native allocation failed (out of memory)");
+        }
+        return true;
+    } catch (const std::exception& e) {
+        throwIAE(env, std::string("native error: ") + e.what());
+        return true;
+    } catch (...) {
+        jclass cls = env->FindClass("java/lang/IllegalStateException");
+        if (cls != nullptr) {
+            env->ThrowNew(cls, "unknown native failure");
+        }
+        return true;
+    }
+}
+
+// RAII owner for object-array frame pins: releases every successfully pinned
+// buffer with JNI_ABORT on scope exit, INCLUDING when a C++ exception unwinds
+// through the frame (the manual release calls previously only covered the
+// explicit error returns).
+class PinnedFrameArrays {
+public:
+    PinnedFrameArrays(JNIEnv* env, jobjectArray frames) : env_(env) {
+        valid_ = pinFrameArrays(env, frames, buffers_, refs_);
+    }
+    ~PinnedFrameArrays() {
+        releaseFrameArrays(env_, buffers_, refs_, JNI_ABORT);
+    }
+    PinnedFrameArrays(const PinnedFrameArrays&) = delete;
+    PinnedFrameArrays& operator=(const PinnedFrameArrays&) = delete;
+
+    bool valid() const { return valid_; }
+    const std::vector<int32_t*>& buffers() const { return buffers_; }
+    const std::vector<jintArray>& refs() const { return refs_; }
+
+private:
+    JNIEnv* env_;
+    std::vector<int32_t*> buffers_;
+    std::vector<jintArray> refs_;
+    bool valid_ = false;
+};
 
 } // namespace pixel_lab
 
